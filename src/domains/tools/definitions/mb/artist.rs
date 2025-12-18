@@ -1,0 +1,400 @@
+//! MusicBrainz Artist search tool.
+//!
+//! This tool provides functionality to search for artists and their releases
+//! using the MusicBrainz database.
+
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use musicbrainz_rs::{
+    Fetch, Search,
+    entity::artist::{Artist, ArtistSearchQuery},
+    entity::release::{Release, ReleaseSearchQuery},
+};
+use rmcp::{
+    ErrorData as McpError,
+    handler::server::tool::{ToolCallContext, ToolRoute, cached_schema_for_type},
+    model::{CallToolResult, Tool},
+};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use tracing::{debug, error, info};
+
+use super::common::{
+    default_limit, error_result, extract_year, is_mbid, success_result, validate_limit,
+};
+
+/// Parameters for artist search operations.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct MbArtistParams {
+    /// The type of search to perform.
+    /// - "artist": Search for artists by name
+    /// - "artist_releases": Search for releases by a specific artist
+    #[schemars(description = "Search type: 'artist' or 'artist_releases'")]
+    pub search_type: String,
+
+    /// The search query string or MusicBrainz ID.
+    #[schemars(description = "Search query (artist name or MBID)")]
+    pub query: String,
+
+    /// Maximum number of results to return (default: 10, max: 100).
+    #[schemars(description = "Maximum number of results (default: 10, max: 100)")]
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+/// MusicBrainz Artist Search Tool implementation.
+#[derive(Debug, Clone)]
+pub struct MbArtistTool;
+
+impl MbArtistTool {
+    /// Tool name as registered in MCP.
+    pub const NAME: &'static str = "mb_artist_search";
+
+    /// Tool description shown to clients.
+    pub const DESCRIPTION: &'static str = "Search for artists and their releases in the MusicBrainz database. Supports artist name search and finding all releases by an artist.";
+
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Execute the tool logic (for STDIO/TCP transport via rmcp).
+    pub fn execute(params: &MbArtistParams) -> CallToolResult {
+        let search_type = params.search_type.clone();
+        let query = params.query.clone();
+        let limit = validate_limit(params.limit);
+
+        match search_type.as_str() {
+            "artist" => Self::search_artists(&query, limit),
+            "artist_releases" => Self::search_releases_by_artist(&query, limit),
+            _ => error_result(&format!(
+                "Unknown search type: {}. Use 'artist' or 'artist_releases'",
+                search_type
+            )),
+        }
+    }
+
+    /// HTTP handler for this tool (for HTTP transport).
+    #[cfg(feature = "http")]
+    pub fn http_handler(arguments: serde_json::Value) -> Result<serde_json::Value, String> {
+        let search_type = arguments
+            .get("search_type")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing or invalid 'search_type' parameter".to_string())?
+            .to_string();
+
+        let query = arguments
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing or invalid 'query' parameter".to_string())?
+            .to_string();
+
+        let limit = arguments
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(10) as usize;
+
+        let params = MbArtistParams {
+            search_type,
+            query,
+            limit,
+        };
+
+        // Use std::thread::spawn to avoid nested runtime panic.
+        // musicbrainz_rs uses reqwest::blocking which creates its own runtime.
+        let handle = std::thread::spawn(move || Self::execute(&params));
+
+        let result = handle
+            .join()
+            .map_err(|_| "Thread panicked during artist search".to_string())?;
+
+        Ok(serde_json::json!({
+            "content": result.content,
+            "isError": result.is_error.unwrap_or(false)
+        }))
+    }
+
+    /// Create a Tool model for this tool (metadata).
+    pub fn to_tool() -> Tool {
+        Tool {
+            name: Self::NAME.into(),
+            description: Some(Self::DESCRIPTION.into()),
+            input_schema: cached_schema_for_type::<MbArtistParams>(),
+            annotations: None,
+            output_schema: None,
+            icons: None,
+            meta: None,
+            title: None,
+        }
+    }
+
+    /// Create a ToolRoute for STDIO/TCP transport.
+    pub fn create_route<S>() -> ToolRoute<S>
+    where
+        S: Send + Sync + 'static,
+    {
+        ToolRoute::new_dyn(Self::to_tool(), |ctx: ToolCallContext<'_, S>| {
+            let args = ctx.arguments.clone().unwrap_or_default();
+            async move {
+                let params: MbArtistParams =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
+                // Use std::thread::spawn to avoid nested runtime panic.
+                // musicbrainz_rs uses reqwest::blocking which creates its own runtime,
+                // so we need a completely separate OS thread.
+                let handle = std::thread::spawn(move || Self::execute(&params));
+
+                let result = handle
+                    .join()
+                    .map_err(|_| McpError::internal_error("Thread panicked".to_string(), None))?;
+
+                Ok(result)
+            }
+            .boxed()
+        })
+    }
+
+    /// Main handler for HTTP transport (runs in its own thread to avoid runtime conflicts).
+    #[deprecated(note = "Use http_handler() instead")]
+    pub fn handle_http(params: MbArtistParams) -> BoxFuture<'static, CallToolResult> {
+        Box::pin(async move {
+            let search_type = params.search_type.clone();
+            let query = params.query.clone();
+            let limit = validate_limit(params.limit);
+
+            // Run in a separate thread to avoid "Cannot start a runtime from within a runtime" error
+            let result = std::thread::spawn(move || match search_type.as_str() {
+                "artist" => Self::search_artists(&query, limit),
+                "artist_releases" => Self::search_releases_by_artist(&query, limit),
+                _ => error_result(&format!(
+                    "Unknown search type: {}. Use 'artist' or 'artist_releases'",
+                    search_type
+                )),
+            })
+            .join()
+            .unwrap_or_else(|e| error_result(&format!("Thread panicked: {:?}", e)));
+
+            result
+        })
+    }
+
+    /// Main handler for STDIO/TCP transport (uses spawn_blocking).
+    pub fn handle_stdio(params: MbArtistParams) -> BoxFuture<'static, CallToolResult> {
+        Box::pin(async move {
+            let search_type = params.search_type.clone();
+            let query = params.query.clone();
+            let limit = validate_limit(params.limit);
+
+            let result = tokio::task::spawn_blocking(move || match search_type.as_str() {
+                "artist" => Self::search_artists(&query, limit),
+                "artist_releases" => Self::search_releases_by_artist(&query, limit),
+                _ => error_result(&format!(
+                    "Unknown search type: {}. Use 'artist' or 'artist_releases'",
+                    search_type
+                )),
+            })
+            .await
+            .unwrap_or_else(|e| error_result(&format!("Task failed: {:?}", e)));
+
+            result
+        })
+    }
+
+    /// Search for artists by name.
+    pub fn search_artists(query: &str, limit: usize) -> CallToolResult {
+        info!("Searching for artists matching: {}", query);
+
+        let search_query = ArtistSearchQuery::query_builder().artist(query).build();
+
+        let search_result = Artist::search(search_query).execute();
+
+        match search_result {
+            Ok(result) => {
+                let artists: Vec<_> = result.entities.into_iter().take(limit).collect();
+                if artists.is_empty() {
+                    return error_result(&format!("No artists found for query: {}", query));
+                }
+
+                let mut output = format!("Found {} artists:\n\n", artists.len());
+                for (i, artist) in artists.iter().enumerate() {
+                    output.push_str(&format!(
+                        "{}. **{}**\n   MBID: {}\n",
+                        i + 1,
+                        artist.name,
+                        artist.id,
+                    ));
+                    if let Some(ref country) = artist.country {
+                        if !country.is_empty() {
+                            output.push_str(&format!("   Country: {}\n", country));
+                        }
+                    }
+                    if let Some(area) = &artist.area {
+                        output.push_str(&format!("   Area: {}\n", area.name));
+                    }
+                    if !artist.disambiguation.is_empty() {
+                        output.push_str(&format!("   Note: {}\n", artist.disambiguation));
+                    }
+                    output.push('\n');
+                }
+
+                success_result(output)
+            }
+            Err(e) => {
+                error!("Artist search failed: {:?}", e);
+                error_result(&format!("Artist search failed: {}", e))
+            }
+        }
+    }
+
+    /// Search for releases by a specific artist (using artist name or MBID).
+    pub fn search_releases_by_artist(query: &str, limit: usize) -> CallToolResult {
+        info!("Searching for releases by artist: {}", query);
+
+        // First, find the artist
+        let artist_id = if is_mbid(query) {
+            query.to_string()
+        } else {
+            // Search for artist first
+            debug!("Looking up artist by name: {}", query);
+            let search_query = ArtistSearchQuery::query_builder().artist(query).build();
+            match Artist::search(search_query).execute() {
+                Ok(result) => {
+                    if let Some(artist) = result.entities.first() {
+                        debug!("Found artist: {} ({})", artist.name, artist.id);
+                        artist.id.clone()
+                    } else {
+                        return error_result(&format!("No artist found matching: {}", query));
+                    }
+                }
+                Err(e) => {
+                    error!("Artist lookup failed: {:?}", e);
+                    return error_result(&format!("Artist lookup failed: {}", e));
+                }
+            }
+        };
+
+        // Get artist details first (for display name)
+        let artist_name = match Artist::fetch().id(&artist_id).execute() {
+            Ok(artist) => artist.name.clone(),
+            Err(_) => "Unknown Artist".to_string(),
+        };
+
+        // Search for releases by this artist using arid (artist MBID)
+        let search_query = ReleaseSearchQuery::query_builder().arid(&artist_id).build();
+        let search_result = Release::search(search_query).execute();
+
+        match search_result {
+            Ok(result) => {
+                let releases: Vec<_> = result.entities.into_iter().take(limit).collect();
+                if releases.is_empty() {
+                    return error_result(&format!("No releases found for artist: {}", artist_name));
+                }
+
+                let mut output = format!(
+                    "Found {} releases by **{}**:\n\n",
+                    releases.len(),
+                    artist_name
+                );
+                for (i, release) in releases.iter().enumerate() {
+                    let year = release
+                        .date
+                        .as_ref()
+                        .and_then(|d| extract_year(&d.0))
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    output.push_str(&format!(
+                        "{}. **{}** ({})\n   MBID: {}\n",
+                        i + 1,
+                        release.title,
+                        year,
+                        release.id,
+                    ));
+                    if let Some(country) = &release.country {
+                        output.push_str(&format!("   Country: {}\n", country));
+                    }
+                    output.push('\n');
+                }
+
+                success_result(output)
+            }
+            Err(e) => {
+                error!("Release search failed: {:?}", e);
+                error_result(&format!("Release search failed: {}", e))
+            }
+        }
+    }
+}
+
+impl Default for MbArtistTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::RawContent;
+
+    #[test]
+    fn test_artist_params_default_limit() {
+        let json = r#"{"search_type": "artist", "query": "Nirvana"}"#;
+        let params: MbArtistParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, 10);
+    }
+
+    #[test]
+    fn test_artist_params_custom_limit() {
+        let json = r#"{"search_type": "artist", "query": "Nirvana", "limit": 5}"#;
+        let params: MbArtistParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.limit, 5);
+    }
+
+    // Integration tests (require network, run with: cargo test -- --ignored)
+    #[ignore]
+    #[test]
+    fn test_search_artists() {
+        let result = MbArtistTool::search_artists("Nirvana", 5);
+        assert!(
+            !result.is_error.unwrap_or(true),
+            "Expected success but got error"
+        );
+        let content = &result.content[0];
+        if let RawContent::Text(text) = &content.raw {
+            assert!(
+                text.text.contains("Nirvana"),
+                "Expected 'Nirvana' in result"
+            );
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn test_search_releases_by_artist() {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let result = MbArtistTool::search_releases_by_artist("Radiohead", 5);
+        assert!(
+            !result.is_error.unwrap_or(true),
+            "Expected success but got error"
+        );
+        let content = &result.content[0];
+        if let RawContent::Text(text) = &content.raw {
+            assert!(
+                text.text.contains("Radiohead"),
+                "Expected 'Radiohead' in result"
+            );
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn test_search_releases_by_artist_mbid() {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        // Radiohead MBID
+        let result =
+            MbArtistTool::search_releases_by_artist("a74b1b7f-71a5-4011-9441-d0b5e4122711", 5);
+        assert!(
+            !result.is_error.unwrap_or(true),
+            "Expected success but got error"
+        );
+    }
+}

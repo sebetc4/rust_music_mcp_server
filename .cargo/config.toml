@@ -1,0 +1,57 @@
+# Cargo configuration for MCP Server
+# 
+# This file provides convenient aliases for building with different
+# feature combinations.
+
+[alias]
+# =============================================================================
+# Development builds (debug mode)
+# =============================================================================
+
+# Build with STDIO only (default, minimal)
+build-stdio = "build"
+
+# Build with TCP support
+build-tcp = "build --features tcp"
+
+# Build with HTTP support
+build-http = "build --features http"
+
+# Build with all transports
+build-all = "build --features all"
+
+# =============================================================================
+# Release builds (optimized)
+# =============================================================================
+
+# Release with STDIO only (smallest binary)
+release-stdio = "build --release"
+
+# Release with all features
+release-all = "build --release --features all"
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+# Test with all features enabled
+test-all = "test --features all"
+
+# Test with only HTTP feature
+test-http = "test --features http"
+
+# =============================================================================
+# Running
+# =============================================================================
+
+# Run with STDIO (default)
+run-stdio = "run"
+
+# Run with TCP
+run-tcp = "run --features tcp"
+
+# Run with HTTP
+run-http = "run --features http"
+
+# Run with all features
+run-all = "run --features all"
