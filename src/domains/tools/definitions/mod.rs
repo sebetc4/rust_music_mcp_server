@@ -7,7 +7,7 @@ pub mod fs;
 pub mod mb;
 pub mod metadata;
 
-pub use fs::{FsListDirTool, FsRenameTool};
+pub use fs::{FsDeleteTool, FsListDirTool, FsRenameTool};
 pub use mb::{
     MbArtistParams, MbArtistTool, MbCoverDownloadParams, MbCoverDownloadTool,
     MbIdentifyRecordTool, MbLabelParams, MbLabelTool, MbRecordingParams, MbRecordingTool,

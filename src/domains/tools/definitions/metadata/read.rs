@@ -4,7 +4,7 @@
 
 use rmcp::{
     ErrorData as McpError,
-    handler::server::tool::{ToolCallContext, ToolRoute, cached_schema_for_type},
+    handler::server::tool::{ToolCallContext, ToolRoute, schema_for_type},
     model::{CallToolResult, Content, Tool},
 };
 
@@ -262,7 +262,7 @@ impl ReadMetadataTool {
         Tool {
             name: Self::NAME.into(),
             description: Some(Self::DESCRIPTION.into()),
-            input_schema: cached_schema_for_type::<ReadMetadataParams>(),
+            input_schema: schema_for_type::<ReadMetadataParams>(),
             annotations: None,
             output_schema: None,
             icons: None,

@@ -11,7 +11,7 @@ use musicbrainz_rs::{
 };
 use rmcp::{
     ErrorData as McpError,
-    handler::server::tool::{ToolCallContext, ToolRoute, cached_schema_for_type},
+    handler::server::tool::{ToolCallContext, ToolRoute, schema_for_type},
     model::{CallToolResult, Tool},
 };
 use schemars::JsonSchema;
@@ -123,7 +123,7 @@ impl MbWorkTool {
         Tool {
             name: Self::NAME.into(),
             description: Some(Self::DESCRIPTION.into()),
-            input_schema: cached_schema_for_type::<MbWorkParams>(),
+            input_schema: schema_for_type::<MbWorkParams>(),
             annotations: None,
             output_schema: None,
             icons: None,

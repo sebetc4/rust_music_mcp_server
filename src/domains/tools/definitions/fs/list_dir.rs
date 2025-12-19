@@ -5,7 +5,7 @@
 use futures::FutureExt;
 use rmcp::{
     ErrorData as McpError,
-    handler::server::tool::{ToolCallContext, ToolRoute, cached_schema_for_type},
+    handler::server::tool::{ToolCallContext, ToolRoute, schema_for_type},
     model::{CallToolResult, Content, Tool},
 };
 use schemars::JsonSchema;
@@ -430,9 +430,9 @@ impl FsListDirTool {
         Tool {
             name: Self::NAME.into(),
             description: Some(Self::DESCRIPTION.into()),
-            input_schema: cached_schema_for_type::<FSListDirParams>(),
+            input_schema: schema_for_type::<FSListDirParams>(),
             annotations: None,
-            output_schema: Some(cached_schema_for_type::<ListResult>()),
+            output_schema: Some(schema_for_type::<ListResult>()),
             icons: None,
             meta: None,
             title: None,

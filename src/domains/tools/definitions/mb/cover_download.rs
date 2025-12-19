@@ -10,7 +10,7 @@ use musicbrainz_rs::entity::CoverartResponse;
 use musicbrainz_rs::FetchCoverart;
 use rmcp::{
     ErrorData as McpError,
-    handler::server::tool::{ToolCallContext, ToolRoute, cached_schema_for_type},
+    handler::server::tool::{ToolCallContext, ToolRoute, schema_for_type},
     model::{CallToolResult, Content, Tool},
 };
 use schemars::JsonSchema;
@@ -165,33 +165,71 @@ impl MbCoverDownloadTool {
         // 7. Get URL for requested size with fallback
         let (image_url, actual_size) =
             Self::get_image_url(selected_image, &params.thumbnail_size);
+
+        // Validate URL
+        if image_url.is_empty() {
+            error!("Empty image URL received from API");
+            return error_result("Invalid image URL received from Cover Art Archive");
+        }
+
         info!(
             "Selected image URL ({}): {}",
             actual_size,
             image_url.chars().take(60).collect::<String>()
         );
 
-        // 8. Download the image
-        let image_bytes = match reqwest::blocking::get(&image_url) {
+        // 8. Download the image with proper HTTP client configuration
+        let client = match reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to build HTTP client: {:?}", e);
+                return error_result(&format!("Failed to build HTTP client: {}", e));
+            }
+        };
+
+        // Convert HTTP URLs to HTTPS for Cover Art Archive
+        let secure_url = if image_url.starts_with("http://coverartarchive.org") {
+            image_url.replace("http://", "https://")
+        } else {
+            image_url.clone()
+        };
+
+        info!("Downloading from: {}", secure_url);
+
+        let image_bytes = match client.get(&secure_url).send() {
             Ok(response) => {
-                if !response.status().is_success() {
-                    error!("HTTP request failed with status: {}", response.status());
+                let status = response.status();
+                if !status.is_success() {
+                    error!("HTTP request failed with status: {} for URL: {}", status, secure_url);
                     return error_result(&format!(
-                        "Failed to download image: HTTP {}",
-                        response.status()
+                        "Failed to download image: HTTP {} - URL: {}",
+                        status, secure_url
                     ));
                 }
                 match response.bytes() {
-                    Ok(bytes) => bytes,
+                    Ok(bytes) => {
+                        if bytes.is_empty() {
+                            error!("Received empty response from: {}", secure_url);
+                            return error_result("Failed to download image: Empty response");
+                        }
+                        bytes
+                    }
                     Err(e) => {
                         error!("Failed to read response bytes: {:?}", e);
-                        return error_result(&format!("Failed to download image: {}", e));
+                        return error_result(&format!("Failed to read image data: {}", e));
                     }
                 }
             }
             Err(e) => {
-                error!("HTTP request failed: {:?}", e);
-                return error_result(&format!("HTTP request failed: {}", e));
+                error!("HTTP request failed for URL {}: {:?}", secure_url, e);
+                return error_result(&format!(
+                    "Failed to download image from {}: {}",
+                    secure_url, e
+                ));
             }
         };
 
@@ -234,12 +272,12 @@ impl MbCoverDownloadTool {
             file_size_bytes: image_bytes.len() as u64,
             image_type: image_type.clone(),
             thumbnail_size: actual_size.clone(),
-            source_url: image_url,
+            source_url: secure_url,
         };
 
         let summary = format!(
             "Downloaded {} cover ({}) to {} ({} bytes)",
-            image_type, actual_size, full_filename, result.file_size_bytes
+            image_type, actual_size, file_path.display(), result.file_size_bytes
         );
 
         info!("{}", summary);
@@ -319,7 +357,7 @@ impl MbCoverDownloadTool {
         Tool {
             name: Self::NAME.into(),
             description: Some(Self::DESCRIPTION.into()),
-            input_schema: cached_schema_for_type::<MbCoverDownloadParams>(),
+            input_schema: schema_for_type::<MbCoverDownloadParams>(),
             annotations: None,
             output_schema: None,
             icons: None,
@@ -387,20 +425,23 @@ impl MbCoverDownloadTool {
     }
 
     /// Get URL for requested size with intelligent fallback.
+    /// Supports both new format (res_250, res_500, res_1200) and legacy format (small, large).
     fn get_image_url(image: &CoverartImage, requested_size: &str) -> (String, String) {
         match requested_size {
             "250" => {
-                // Try 250, fallback to 500, 1200, then original
+                // Try 250 (new format), fallback to small (legacy), then 500, 1200, original
                 image
                     .thumbnails
                     .res_250
                     .clone()
+                    .or_else(|| image.thumbnails.small.clone())
                     .map(|url| (url, "250".to_string()))
                     .or_else(|| {
                         image
                             .thumbnails
                             .res_500
                             .clone()
+                            .or_else(|| image.thumbnails.large.clone())
                             .map(|url| (url, "500".to_string()))
                     })
                     .or_else(|| {
@@ -413,11 +454,12 @@ impl MbCoverDownloadTool {
                     .unwrap_or_else(|| (image.image.clone(), "original".to_string()))
             }
             "500" => {
-                // Try 500, fallback to 1200, 250, then original
+                // Try 500 (new format), fallback to large (legacy), then 1200, 250/small, original
                 image
                     .thumbnails
                     .res_500
                     .clone()
+                    .or_else(|| image.thumbnails.large.clone())
                     .map(|url| (url, "500".to_string()))
                     .or_else(|| {
                         image
@@ -431,17 +473,26 @@ impl MbCoverDownloadTool {
                             .thumbnails
                             .res_250
                             .clone()
+                            .or_else(|| image.thumbnails.small.clone())
                             .map(|url| (url, "250".to_string()))
                     })
                     .unwrap_or_else(|| (image.image.clone(), "original".to_string()))
             }
             "1200" => {
-                // Try 1200, fallback to original
+                // Try 1200, fallback to large/500 (legacy), then original
                 image
                     .thumbnails
                     .res_1200
                     .clone()
                     .map(|url| (url, "1200".to_string()))
+                    .or_else(|| {
+                        image
+                            .thumbnails
+                            .res_500
+                            .clone()
+                            .or_else(|| image.thumbnails.large.clone())
+                            .map(|url| (url, "500".to_string()))
+                    })
                     .unwrap_or_else(|| (image.image.clone(), "original".to_string()))
             }
             "original" | _ => (image.image.clone(), "original".to_string()),
@@ -544,6 +595,127 @@ mod tests {
             MbCoverDownloadTool::detect_extension("https://example.com/noext"),
             "jpg"
         ); // Fallback
+    }
+
+    #[test]
+    fn test_get_image_url_legacy_format() {
+        use musicbrainz_rs::entity::coverart::{CoverartImage, Thumbnail};
+
+        // Create a CoverartImage with legacy format (small/large only)
+        let thumbnail = Thumbnail {
+            small: Some("http://example.com/image-250.jpg".to_string()),
+            large: Some("http://example.com/image-500.jpg".to_string()),
+            res_250: None,
+            res_500: None,
+            res_1200: None,
+        };
+
+        let image = CoverartImage {
+            approved: true,
+            back: false,
+            comment: "Test".to_string(),
+            edit: 123,
+            front: true,
+            id: 456,
+            image: "http://example.com/image-original.jpg".to_string(),
+            thumbnails: thumbnail,
+            types: vec![],
+        };
+
+        // Test 250px request - should use "small" field
+        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "250");
+        assert_eq!(url, "http://example.com/image-250.jpg");
+        assert_eq!(size, "250");
+
+        // Test 500px request - should use "large" field
+        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "500");
+        assert_eq!(url, "http://example.com/image-500.jpg");
+        assert_eq!(size, "500");
+
+        // Test 1200px request - should fallback to "large" (500)
+        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "1200");
+        assert_eq!(url, "http://example.com/image-500.jpg");
+        assert_eq!(size, "500");
+
+        // Test original request
+        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "original");
+        assert_eq!(url, "http://example.com/image-original.jpg");
+        assert_eq!(size, "original");
+    }
+
+    #[test]
+    fn test_get_image_url_new_format() {
+        use musicbrainz_rs::entity::coverart::{CoverartImage, Thumbnail};
+
+        // Create a CoverartImage with new format (res_250, res_500, res_1200)
+        let thumbnail = Thumbnail {
+            small: None,
+            large: None,
+            res_250: Some("http://example.com/image-250.jpg".to_string()),
+            res_500: Some("http://example.com/image-500.jpg".to_string()),
+            res_1200: Some("http://example.com/image-1200.jpg".to_string()),
+        };
+
+        let image = CoverartImage {
+            approved: true,
+            back: false,
+            comment: "Test".to_string(),
+            edit: 123,
+            front: true,
+            id: 456,
+            image: "http://example.com/image-original.jpg".to_string(),
+            thumbnails: thumbnail,
+            types: vec![],
+        };
+
+        // Test all sizes
+        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "250");
+        assert_eq!(url, "http://example.com/image-250.jpg");
+        assert_eq!(size, "250");
+
+        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "500");
+        assert_eq!(url, "http://example.com/image-500.jpg");
+        assert_eq!(size, "500");
+
+        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "1200");
+        assert_eq!(url, "http://example.com/image-1200.jpg");
+        assert_eq!(size, "1200");
+    }
+
+    #[test]
+    fn test_get_image_url_mixed_format() {
+        use musicbrainz_rs::entity::coverart::{CoverartImage, Thumbnail};
+
+        // Create a CoverartImage with mixed format (some legacy, some new)
+        let thumbnail = Thumbnail {
+            small: Some("http://example.com/image-250-legacy.jpg".to_string()),
+            large: None,
+            res_250: None,
+            res_500: Some("http://example.com/image-500-new.jpg".to_string()),
+            res_1200: None,
+        };
+
+        let image = CoverartImage {
+            approved: true,
+            back: false,
+            comment: "Test".to_string(),
+            edit: 123,
+            front: true,
+            id: 456,
+            image: "http://example.com/image-original.jpg".to_string(),
+            thumbnails: thumbnail,
+            types: vec![],
+        };
+
+        // Test 250px - should prefer res_250 (None) then fallback to small (legacy)
+        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "250");
+        assert_eq!(url, "http://example.com/image-250-legacy.jpg");
+        assert_eq!(size, "250");
+
+        // Test 500px - should use res_500 (new format available)
+        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "500");
+        assert_eq!(url, "http://example.com/image-500-new.jpg");
+        assert_eq!(size, "500");
     }
 
     // Network tests (require actual internet connection, run with --ignored)

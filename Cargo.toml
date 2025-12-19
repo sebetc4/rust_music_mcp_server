@@ -34,7 +34,7 @@ all = ["stdio", "tcp", "http"]
 
 [dependencies]
 # MCP SDK
-rmcp = { version = "0.11", features = ["server", "transport-io", "macros", "schemars"] }
+rmcp = { version = "0.12", features = ["server", "transport-io", "macros", "schemars"] }
 
 # Async runtime
 tokio = { version = "1.48", features = ["rt-multi-thread", "macros", "time", "io-std", "io-util", "sync"] }
@@ -64,7 +64,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Metadata
 lofty = "0.22.4"
 musicbrainz_rs = { version = "0.12", default-features = false, features = ["blocking"] }
-reqwest = { version = "0.12.26", features = ["blocking", "json"] }
+reqwest = { version = "0.12.26", features = ["blocking", "json", "rustls-tls"], default-features = false }
 
 # Utilities
 async-trait = "0.1"

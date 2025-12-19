@@ -7,13 +7,15 @@ This directory contains documentation for filesystem manipulation tools in the M
 ### Core Operations
 - **[fs_list_dir](fs_list_dir.md)** - List directory contents with recursive support
 - **[fs_rename](fs_rename.md)** - Rename files and directories with dry-run support
+- **[fs_delete](fs_delete.md)** - Delete files and directories with safety checks
 
 ## Quick Comparison
 
-| Tool | Purpose | Recursive | Dry Run | Output Format |
-|------|---------|-----------|---------|---------------|
-| [fs_list_dir](fs_list_dir.md) | Read directory contents | ✅ Yes | N/A | JSON |
-| [fs_rename](fs_rename.md) | Rename files/directories | ❌ No | ✅ Yes | Text |
+| Tool | Purpose | Recursive | Dry Run | Reversible | Output Format |
+|------|---------|-----------|---------|------------|---------------|
+| [fs_list_dir](fs_list_dir.md) | Read directory contents | ✅ Yes | N/A | N/A | JSON |
+| [fs_rename](fs_rename.md) | Rename files/directories | ❌ No | ✅ Yes | ✅ Yes | Text |
+| [fs_delete](fs_delete.md) | Delete files/directories | ✅ Yes | ❌ No | ❌ No | JSON |
 
 ## Common Use Cases
 
@@ -48,6 +50,23 @@ This directory contains documentation for filesystem manipulation tools in the M
    }
    ```
 
+4. **Delete Duplicate Files**
+   ```json
+   // Use fs_delete after identifying duplicates
+   {
+     "path": "/music/Artist/duplicate.mp3"
+   }
+   ```
+
+5. **Clean Up Empty Directories**
+   ```json
+   // Use fs_delete on empty directories
+   {
+     "path": "/music/empty_folder",
+     "recursive": false
+   }
+   ```
+
 ## Security & Safety
 
 All filesystem tools implement:
@@ -73,6 +92,8 @@ mb_identify_record → match to MusicBrainz
 write_metadata → update tags
      ↓
 fs_rename → organize files
+     ↓
+fs_delete → remove duplicates
 ```
 
 ## Configuration
@@ -111,6 +132,17 @@ See [Configuration Guide](../../guides/configuration.md) for details.
 - ✅ Use `fs_list_dir` to discover files, then rename individually
 - ✅ Check existence with `fs_list_dir` before renaming
 
+### 4. Verify Before Deleting
+```json
+// Bad: Delete without checking
+{"path": "/music/unknown", "recursive": true}
+
+// Good: List first, then delete
+{"tool": "fs_list_dir", "path": "/music/unknown"}
+// ... review output ...
+{"tool": "fs_delete", "path": "/music/unknown", "recursive": true}
+```
+
 ## Related Documentation
 
 - [Adding New Tools](../../guides/adding-tools.md) - Create custom filesystem tools
@@ -122,3 +154,4 @@ See [Configuration Guide](../../guides/configuration.md) for details.
 
 - [fs_list_dir.md](fs_list_dir.md) - Detailed `fs_list_dir` documentation
 - [fs_rename.md](fs_rename.md) - Detailed `fs_rename` documentation
+- [fs_delete.md](fs_delete.md) - Detailed `fs_delete` documentation

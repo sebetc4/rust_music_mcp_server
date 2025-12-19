@@ -11,8 +11,8 @@ use crate::core::config::Config;
 use crate::domains::tools::definitions::MbIdentifyRecordTool;
 
 use super::definitions::{
-    FsListDirTool, FsRenameTool, MbArtistTool, MbCoverDownloadTool, MbLabelTool, MbRecordingTool,
-    MbReleaseTool, MbWorkTool, ReadMetadataTool, WriteMetadataTool,
+    FsDeleteTool, FsListDirTool, FsRenameTool, MbArtistTool, MbCoverDownloadTool, MbLabelTool,
+    MbRecordingTool, MbReleaseTool, MbWorkTool, ReadMetadataTool, WriteMetadataTool,
 };
 
 /// Build the tool router with all registered tools.
@@ -21,6 +21,7 @@ where
     S: Send + Sync + 'static,
 {
     ToolRouter::new()
+        .with_route(FsDeleteTool::create_route(config.clone()))
         .with_route(FsListDirTool::create_route(config.clone()))
         .with_route(FsRenameTool::create_route(config.clone()))
         .with_route(MbArtistTool::create_route())
@@ -49,9 +50,10 @@ mod tests {
     fn test_build_router() {
         let router: ToolRouter<TestServer> = build_tool_router(test_config());
         let tools = router.list_all();
-        assert_eq!(tools.len(), 11);
+        assert_eq!(tools.len(), 12);
 
         let names: Vec<_> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert!(names.contains(&"fs_delete"));
         assert!(names.contains(&"fs_list_dir"));
         assert!(names.contains(&"mb_artist_search"));
         assert!(names.contains(&"mb_cover_download"));

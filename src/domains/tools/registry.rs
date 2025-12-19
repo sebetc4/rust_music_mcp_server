@@ -15,8 +15,8 @@ use crate::core::config::Config;
 use crate::domains::tools::definitions::MbIdentifyRecordTool;
 
 use super::definitions::{
-    FsListDirTool, FsRenameTool, MbArtistTool, MbCoverDownloadTool, MbLabelTool, MbRecordingTool,
-    MbReleaseTool, MbWorkTool, ReadMetadataTool, WriteMetadataTool,
+    FsDeleteTool, FsListDirTool, FsRenameTool, MbArtistTool, MbCoverDownloadTool, MbLabelTool,
+    MbRecordingTool, MbReleaseTool, MbWorkTool, ReadMetadataTool, WriteMetadataTool,
 };
 
 // ============================================================================
@@ -41,6 +41,7 @@ impl ToolRegistry {
     /// Get all tool names.
     pub fn tool_names(&self) -> Vec<&'static str> {
         vec![
+            FsDeleteTool::NAME,
             FsListDirTool::NAME,
             FsRenameTool::NAME,
             ReadMetadataTool::NAME,
@@ -61,6 +62,7 @@ impl ToolRegistry {
     /// Both HTTP and STDIO/TCP transports use this to get tool metadata.
     pub fn get_all_tools() -> Vec<Tool> {
         vec![
+            FsDeleteTool::to_tool(),
             FsListDirTool::to_tool(),
             FsRenameTool::to_tool(),
             MbArtistTool::to_tool(),
@@ -85,6 +87,7 @@ impl ToolRegistry {
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         match name {
+            FsDeleteTool::NAME => FsDeleteTool::http_handler(arguments, self.config.clone()),
             FsListDirTool::NAME => FsListDirTool::http_handler(arguments, self.config.clone()),
             FsRenameTool::NAME => FsRenameTool::http_handler(arguments, self.config.clone()),
             MbArtistTool::NAME => MbArtistTool::http_handler(arguments),
@@ -120,7 +123,8 @@ mod tests {
     fn test_registry_tool_names() {
         let registry = ToolRegistry::new(test_config());
         let names = registry.tool_names();
-        assert_eq!(names.len(), 11);
+        assert_eq!(names.len(), 12);
+        assert!(names.contains(&"fs_delete"));
         assert!(names.contains(&"fs_list_dir"));
         assert!(names.contains(&"fs_rename"));
         assert!(names.contains(&"mb_artist_search"));

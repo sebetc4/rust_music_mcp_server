@@ -20,9 +20,9 @@ Welcome to the comprehensive technical documentation for the Music MCP Server pr
 - [External APIs](architecture/external-apis.md) - MusicBrainz and AcoustID integration details
 
 ### Tools Reference
-- [Filesystem Tools](tools/fs/) - `fs_list_dir` (with recursive support), `fs_rename`
-- [Metadata Tools](tools/metadata-tools.md) - `read_metadata`, `write_metadata`
-- [MusicBrainz Tools](tools/mb/) - All 5 MB tools with examples
+- [Filesystem Tools](tools/fs/) - `fs_list_dir` (with recursive support), `fs_rename`, `fs_delete`
+- [Metadata Tools](tools/metadata/) - `read_metadata`, `write_metadata`
+- [MusicBrainz Tools](tools/mb/) - All 7 MB tools with examples
 
 ### Deep Dives
 - [Tool Output Formats](reference/tool-output-formats.md) - **NEW**: Complete MCP output format guide (text, structured, resources, errors)
@@ -52,14 +52,18 @@ documentation/
 │   └── testing.md                 # Testing approach
 │
 ├── tools/                          # Individual tool documentation
-│   ├── fs/                        # Filesystem tools (2 tools)
+│   ├── fs/                        # Filesystem tools (3 tools)
 │   │   ├── README.md              # Overview and quick reference
 │   │   ├── fs_list_dir.md         # Directory listing (with recursion)
-│   │   └── fs_rename.md           # Rename/move files
-│   ├── mb/                        # MusicBrainz tools (5 tools)
+│   │   ├── fs_rename.md           # Rename/move files
+│   │   └── fs_delete.md           # Delete files/directories
+│   ├── metadata/                  # Metadata tools (2 tools)
+│   │   ├── README.md              # Overview and quick reference
+│   │   ├── read_metadata.md       # Read audio file tags
+│   │   └── write_metadata.md      # Write/update audio tags
+│   ├── mb/                        # MusicBrainz tools (7 tools)
 │   │   ├── README.md              # Overview and quick reference
 │   │   └── ...                    # Individual tool docs
-│   └── metadata-tools.md          # Audio metadata (2 tools)
 │
 └── reference/                      # In-depth technical topics
     ├── tool-output-formats.md     # MCP output format guide (NEW)
@@ -116,10 +120,10 @@ The Music MCP Server is a **Rust-based MCP (Model Context Protocol) server** des
                     ┌──────────────▼──────────────┐
                     │       Domain Layer           │
                     │  ┌────────────────────────┐  │
-                    │  │  Tools (10 total)      │  │
-                    │  │  - Filesystem (2)      │  │
+                    │  │  Tools (12 total)      │  │
+                    │  │  - Filesystem (3)      │  │
                     │  │  - Metadata (2)        │  │
-                    │  │  - MusicBrainz (6)     │  │
+                    │  │  - MusicBrainz (7)     │  │
                     │  └────────────────────────┘  │
                     │  ┌────────────────────────┐  │
                     │  │  Resources & Prompts   │  │
@@ -136,12 +140,13 @@ The Music MCP Server is a **Rust-based MCP (Model Context Protocol) server** des
 
 ---
 
-## Available Tools (10 Total)
+## Available Tools (12 Total)
 
 | Tool Name | Category | Description |
 |-----------|----------|-------------|
 | `fs_list_dir` | Filesystem | List directory contents with optional details |
 | `fs_rename` | Filesystem | Rename files with dry-run support |
+| `fs_delete` | Filesystem | Delete files/directories with safety checks |
 | `read_metadata` | Metadata | Read audio tags (MP3, FLAC, M4A, WAV, OGG) |
 | `write_metadata` | Metadata | Write/update audio tags |
 | `mb_artist_search` | MusicBrainz | Search artists, get releases |
@@ -149,6 +154,7 @@ The Music MCP Server is a **Rust-based MCP (Model Context Protocol) server** des
 | `mb_recording_search` | MusicBrainz | Search recordings and find where they appear |
 | `mb_work_search` | MusicBrainz | Search works (musical compositions) |
 | `mb_label_search` | MusicBrainz | Search labels (record labels/publishers) |
+| `mb_cover_download` | MusicBrainz | Download album cover art from MusicBrainz |
 | `mb_identify_record` | MusicBrainz | Audio fingerprinting via AcoustID |
 
 ---
@@ -178,6 +184,7 @@ When adding new documentation:
 - **New to the project?** Start with [System Overview](architecture/overview.md)
 - **Adding a tool?** See [Adding New Tools](guides/adding-tools.md)
 - **Understanding transports?** Read [Transport Layer](architecture/transport-layer.md)
-- **Working with MusicBrainz?** Check [MusicBrainz Tools](tools/musicbrainz-tools.md)
+- **Working with metadata?** Check [Metadata Tools](tools/metadata/)
+- **Working with MusicBrainz?** Check [MusicBrainz Tools](tools/mb/)
 
 For AI agent development guidelines, see [../CLAUDE.md](../CLAUDE.md).
