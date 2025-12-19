@@ -9,7 +9,7 @@ use rmcp::{
     model::{CallToolResult, Content, Tool},
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -34,6 +34,28 @@ pub struct FsRenameParams {
     /// Overwrite destination if it already exists.
     #[serde(default)]
     pub overwrite: bool,
+}
+
+// ============================================================================
+// Output Structure (JSON format for AI agents)
+// ============================================================================
+
+/// Result of a rename/move operation
+#[derive(Debug, Serialize, JsonSchema)]
+struct RenameResult {
+    /// Source path (original location)
+    from: String,
+    /// Destination path (new location)
+    to: String,
+    /// Type of item renamed ("file", "directory", or "item")
+    item_type: String,
+    /// Type of operation performed ("renamed" or "moved")
+    operation: String,
+    /// Whether the operation succeeded
+    success: bool,
+    /// Whether an existing file was overwritten
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overwritten: Option<bool>,
 }
 
 // ============================================================================
@@ -101,8 +123,9 @@ impl FsRenameTool {
             }
         }
 
-        // Check if destination already exists
-        if to_path.exists() && !params.overwrite {
+        // Check if destination already exists (track for result)
+        let destination_exists = to_path.exists();
+        if destination_exists && !params.overwrite {
             warn!("Destination already exists: {}", params.to);
             return CallToolResult::error(vec![Content::text(format!(
                 "Destination already exists: {}. Use overwrite=true to replace it.",
@@ -131,12 +154,33 @@ impl FsRenameTool {
                     operation, params.from, params.to
                 );
 
-                let message = format!(
+                // Create human-readable summary
+                let summary = format!(
                     "Successfully {} {} from '{}' to '{}'",
                     operation, source_type, params.from, params.to
                 );
 
-                CallToolResult::success(vec![Content::text(message)])
+                // Create structured result
+                let result = RenameResult {
+                    from: params.from.clone(),
+                    to: params.to.clone(),
+                    item_type: source_type.to_string(),
+                    operation: operation.to_string(),
+                    success: true,
+                    overwritten: if destination_exists && params.overwrite {
+                        Some(true)
+                    } else {
+                        None
+                    },
+                };
+
+                // Return with text summary + structured content
+                CallToolResult {
+                    content: vec![Content::text(summary)],
+                    structured_content: Some(serde_json::to_value(&result).unwrap()),
+                    is_error: Some(false),
+                    meta: None,
+                }
             }
             Err(e) => {
                 warn!(
@@ -197,10 +241,8 @@ impl FsRenameTool {
 
         let result = Self::execute(&params, &config);
 
-        Ok(serde_json::json!({
-            "content": result.content,
-            "isError": result.is_error.unwrap_or(false)
-        }))
+        // Serialize the full CallToolResult to preserve all fields including structuredContent
+        serde_json::to_value(&result).map_err(|e| e.to_string())
     }
 
     /// Create a Tool model for this tool (metadata).
@@ -210,7 +252,7 @@ impl FsRenameTool {
             description: Some(Self::DESCRIPTION.into()),
             input_schema: cached_schema_for_type::<FsRenameParams>(),
             annotations: None,
-            output_schema: None,
+            output_schema: Some(cached_schema_for_type::<RenameResult>()),
             icons: None,
             meta: None,
             title: None,
@@ -437,5 +479,102 @@ mod tests {
         let config = Arc::new(test_config());
         let result = FsRenameTool::http_handler(args, config);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_structured_content_in_result() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        let old_file = temp_path.join("old.txt");
+        let new_file = temp_path.join("new.txt");
+        fs::write(&old_file, "test").unwrap();
+
+        let params = FsRenameParams {
+            from: old_file.to_string_lossy().to_string(),
+            to: new_file.to_string_lossy().to_string(),
+            overwrite: false,
+        };
+
+        let config = test_config();
+        let result = FsRenameTool::execute(&params, &config);
+
+        // Verify structured content exists
+        assert!(result.structured_content.is_some(), "structured_content should be present");
+
+        let structured = result.structured_content.unwrap();
+
+        // Verify fields
+        assert_eq!(structured["from"], params.from);
+        assert_eq!(structured["to"], params.to);
+        assert_eq!(structured["item_type"], "file");
+        assert_eq!(structured["operation"], "renamed");
+        assert_eq!(structured["success"], true);
+
+        // Verify text summary
+        let text = match &result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => &t.text,
+            _ => panic!("Expected text content"),
+        };
+        assert!(text.contains("Successfully"));
+        assert!(text.contains("renamed"));
+    }
+
+    #[test]
+    fn test_structured_content_with_overwrite() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        let old_file = temp_path.join("old.txt");
+        let existing_file = temp_path.join("existing.txt");
+        fs::write(&old_file, "old").unwrap();
+        fs::write(&existing_file, "existing").unwrap();
+
+        let params = FsRenameParams {
+            from: old_file.to_string_lossy().to_string(),
+            to: existing_file.to_string_lossy().to_string(),
+            overwrite: true,
+        };
+
+        let config = test_config();
+        let result = FsRenameTool::execute(&params, &config);
+
+        let structured = result.structured_content.expect("structured_content should exist");
+
+        // Verify overwritten field is present
+        assert_eq!(structured["overwritten"], true);
+    }
+
+    #[test]
+    fn test_structured_content_serialization() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        let old_file = temp_path.join("source.txt");
+        let new_file = temp_path.join("dest.txt");
+        fs::write(&old_file, "data").unwrap();
+
+        let params = FsRenameParams {
+            from: old_file.to_string_lossy().to_string(),
+            to: new_file.to_string_lossy().to_string(),
+            overwrite: false,
+        };
+
+        let config = test_config();
+        let result = FsRenameTool::execute(&params, &config);
+
+        // Serialize to JSON like the MCP server does
+        let serialized = serde_json::to_value(&result).unwrap();
+
+        // Verify structuredContent exists in camelCase
+        assert!(
+            serialized.get("structuredContent").is_some(),
+            "structuredContent field missing in serialized output"
+        );
+
+        // Verify content has text summary (not full JSON)
+        let content_text = serialized["content"][0]["text"].as_str().unwrap();
+        assert!(content_text.contains("Successfully"));
+        assert!(!content_text.starts_with('{'), "Text should be summary, not JSON");
     }
 }

@@ -12,6 +12,9 @@ The `mb_identify_record` tool allows you to:
 - Verify file integrity against expected tracks
 - Discover official release information for any audio file
 - Get complete MusicBrainz data for identified recordings
+- Returns structured JSON data with concise text summaries
+
+**Output Format**: This tool follows MCP standards, returning a short text summary plus structured JSON data for programmatic access.
 
 This tool combines:
 - **Chromaprint** (fpcalc) for acoustic fingerprinting
@@ -24,8 +27,9 @@ This tool combines:
 
 ```typescript
 {
-  file_path: string,                    // Path to audio file (required)
-  metadata_level: "minimal" | "basic" | "full"  // Level of detail (default: "basic")
+  file_path: string,                         // Path to audio file (required)
+  limit?: number,                            // Max results (default: 3, max: 10)
+  metadata_level?: "minimal" | "basic" | "full"  // Level of detail (default: "basic")
 }
 ```
 
@@ -36,114 +40,54 @@ This tool combines:
   - File must exist and be readable
   - Supports various audio formats (see [Supported Formats](#supported-formats))
 
+- **limit** (optional)
+  - Range: 1-10
+  - Default: 3
+  - Number of identification matches to return
+
 - **metadata_level** (optional)
-  - `minimal`: Track, artist, release info only (fastest)
-  - `basic` (default): + Duration, date, country, MBIDs
-  - `full`: Complete metadata including labels, formats, credits, tracklists
+  - `minimal`: Only MusicBrainz Recording IDs (fastest)
+  - `basic` (default): Recording IDs + title, artists, and duration
+  - `full`: Complete metadata including release groups, albums, and dates
+
+---
+
+## Output Format
+
+The tool returns:
+1. **Text Summary**: A concise description of the identification result
+2. **Structured JSON Data**: Complete fingerprint match data in a standardized format
+
+This follows MCP standards for structured tool output, providing both human-readable summaries and machine-parseable data.
 
 ---
 
 ## Metadata Levels
 
 ### Minimal
-**What's included**:
-- Recording title and MBID
-- Artist name(s) and MBID(s)
-- Release title and MBID
-- AcoustID score
+**What's included**: Only MusicBrainz Recording IDs
 
-**Use case**: Quick identification, batch processing, simple tagging
+**Use case**: Quick identification, batch processing when you only need IDs
 
-**Example output**:
-```
-Recording: Paranoid Android
-  MBID: 6bf6f137-f7e5-4e40-880f-db35b3f9c272
-
-Artists:
-  - Radiohead (MBID: a74b1b7f-71a5-4011-9441-d0b5e4122711)
-
-Releases:
-  - OK Computer
-    MBID: 52709206-8816-3c12-9ff6-f957f2f1eecf
-```
+**Structured Output**: Recording IDs without titles or artist names
 
 ---
 
 ### Basic (Default)
-**What's included**: Everything in Minimal, plus:
-- Recording duration
-- Release date
-- Release country
-- Track position
-- Release type (Album, Single, etc.)
+**What's included**: Recording IDs + title, artist names, and duration
 
-**Use case**: Standard music library tagging
+**Use case**: Standard music library tagging (recommended for most cases)
 
-**Example output**:
-```
-Recording: Paranoid Android
-  MBID: 6bf6f137-f7e5-4e40-880f-db35b3f9c272
-  Duration: 6:23
-
-Artists:
-  - Radiohead (MBID: a74b1b7f-71a5-4011-9441-d0b5e4122711)
-
-Releases:
-  - OK Computer (1997)
-    MBID: 52709206-8816-3c12-9ff6-f957f2f1eecf
-    Country: GB
-    Type: Album
-    Track #2
-```
+**Structured Output**: Recording information with basic metadata
 
 ---
 
 ### Full
-**What's included**: Everything in Basic, plus:
-- Record label information
-- Catalog numbers
-- Barcode
-- Release format and packaging
-- Complete tracklist
-- Contributing artists (performers, producers, etc.)
-- Album artwork URLs (if available)
-- Additional credits
+**What's included**: Complete metadata including release groups, albums, formats, and dates
 
-**Use case**: Complete metadata collection, archival, detailed music databases
+**Use case**: Complete metadata collection, detailed music databases
 
-**Example output**:
-```
-Recording: Paranoid Android
-  MBID: 6bf6f137-f7e5-4e40-880f-db35b3f9c272
-  Duration: 6:23
-  ISRC: GBAYE9700361
-
-Artists:
-  - Radiohead (MBID: a74b1b7f-71a5-4011-9441-d0b5e4122711)
-
-Releases:
-  - OK Computer (1997-05-21)
-    MBID: 52709206-8816-3c12-9ff6-f957f2f1eecf
-    Country: GB
-    Type: Album
-    Status: Official
-    Format: CD
-    Packaging: Jewel Case
-    Label: Parlophone
-    Catalog: CDPCSD 10
-    Barcode: 724384260927
-    Track #2 of 12
-
-    Full Tracklist:
-    1. Airbag (4:44)
-    2. Paranoid Android (6:23)
-    [... tracks 3-12 ...]
-
-    Credits:
-    - Producer: Nigel Godrich
-    - Engineer: Nigel Godrich
-    - Recorded at: St Catherine's Court
-```
+**Structured Output**: Comprehensive recording and release information
 
 ---
 
@@ -215,7 +159,7 @@ Most common audio formats are supported.
 
 ## Examples
 
-### Example 1: Basic Identification
+### Example 1: Basic Identification (Default)
 
 Identify an unknown file with default settings.
 
@@ -229,34 +173,48 @@ Identify an unknown file with default settings.
 }
 ```
 
-**Response** (truncated):
+**Text Summary**:
 ```
-Audio Identification Results
-============================
+Identified: 'Paranoid Android' by Radiohead (95% confidence, 3 match(es))
+```
 
-File: /music/unknown_track.mp3
-Fingerprint generated successfully (duration: 243.5s)
-
-Found 3 match(es) from AcoustID:
-
-Match #1 (Score: 0.95)
-─────────────────────
-
-Recording: Paranoid Android
-  MBID: 6bf6f137-f7e5-4e40-880f-db35b3f9c272
-  Duration: 6:23
-
-Artists:
-  - Radiohead (MBID: a74b1b7f-71a5-4011-9441-d0b5e4122711)
-
-Releases:
-  - OK Computer (1997)
-    MBID: 52709206-8816-3c12-9ff6-f957f2f1eecf
-    Country: GB
-
-Match #2 (Score: 0.87)
-─────────────────────
-[...]
+**Structured Data**:
+```json
+{
+  "file": "/music/unknown_track.mp3",
+  "metadata_level": "basic",
+  "matches": [
+    {
+      "rank": 1,
+      "confidence": 0.95,
+      "acoustid": "12345678-1234-1234-1234-123456789012",
+      "recordings": [
+        {
+          "id": "6bf6f137-f7e5-4e40-880f-db35b3f9c272",
+          "title": "Paranoid Android",
+          "duration": 383,
+          "artists": ["Radiohead"],
+          "release_groups": null
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "confidence": 0.87,
+      "acoustid": "87654321-4321-4321-4321-210987654321",
+      "recordings": [
+        {
+          "id": "another-recording-mbid",
+          "title": "Paranoid Android",
+          "duration": 383,
+          "artists": ["Radiohead"],
+          "release_groups": null
+        }
+      ]
+    }
+  ],
+  "status": "success"
+}
 ```
 
 ---
@@ -271,8 +229,39 @@ Fast identification with minimal data transfer.
   "name": "mb_identify_record",
   "arguments": {
     "file_path": "/music/batch/track_001.mp3",
-    "metadata_level": "minimal"
+    "metadata_level": "minimal",
+    "limit": 3
   }
+}
+```
+
+**Text Summary**:
+```
+Identified audio: 3 match(es) found (best: 95% confidence, Recording ID: 6bf6f137-f7e5-4e40-880f-db35b3f9c272)
+```
+
+**Structured Data**:
+```json
+{
+  "file": "/music/batch/track_001.mp3",
+  "metadata_level": "minimal",
+  "matches": [
+    {
+      "rank": 1,
+      "confidence": 0.95,
+      "acoustid": "12345678-1234-1234-1234-123456789012",
+      "recordings": [
+        {
+          "id": "6bf6f137-f7e5-4e40-880f-db35b3f9c272",
+          "title": null,
+          "duration": null,
+          "artists": null,
+          "release_groups": null
+        }
+      ]
+    }
+  ],
+  "status": "success"
 }
 ```
 
@@ -290,19 +279,55 @@ Get all available information for comprehensive tagging.
   "name": "mb_identify_record",
   "arguments": {
     "file_path": "/music/discovery_01.flac",
-    "metadata_level": "full"
+    "metadata_level": "full",
+    "limit": 3
   }
+}
+```
+
+**Text Summary**:
+```
+Identified: 'Paranoid Android' by Radiohead (95% confidence, 2 release group(s), 3 total match(es))
+```
+
+**Structured Data**:
+```json
+{
+  "file": "/music/discovery_01.flac",
+  "metadata_level": "full",
+  "matches": [
+    {
+      "rank": 1,
+      "confidence": 0.95,
+      "acoustid": "12345678-1234-1234-1234-123456789012",
+      "recordings": [
+        {
+          "id": "6bf6f137-f7e5-4e40-880f-db35b3f9c272",
+          "title": "Paranoid Android",
+          "duration": 383,
+          "artists": ["Radiohead"],
+          "release_groups": [
+            {
+              "name": "OK Computer",
+              "type": "Album"
+            },
+            {
+              "name": "OK Computer OKNOTOK 1997 2017",
+              "type": "Album"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "status": "success"
 }
 ```
 
 **Response includes**:
 - Complete track information
-- All contributing artists (performers, composers, producers)
-- Label information
-- Catalog numbers
-- Barcode
-- Full release tracklist
-- Album artwork URLs (if available)
+- All release groups containing the recording
+- Album types and additional metadata
 
 ---
 

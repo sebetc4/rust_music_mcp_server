@@ -16,13 +16,75 @@ use rmcp::{
     model::{CallToolResult, Tool},
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info};
 
 use super::common::{
-    default_limit, error_result, extract_year, format_date, format_duration, get_artist_name,
-    is_mbid, success_result, validate_limit,
+    default_limit, error_result, extract_year, format_duration, get_artist_name, is_mbid,
+    structured_result, validate_limit,
 };
+
+/// Structured output for release search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseSearchResult {
+    pub releases: Vec<ReleaseSearchInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseSearchInfo {
+    pub title: String,
+    pub mbid: String,
+    pub artist: String,
+    pub year: Option<String>,
+    pub country: Option<String>,
+    pub barcode: Option<String>,
+}
+
+/// Structured output for release recordings (track listing).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseRecordingsResult {
+    pub release_title: String,
+    pub release_mbid: String,
+    pub artist: String,
+    pub media: Vec<Medium>,
+    pub total_tracks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct Medium {
+    pub disc_number: usize,
+    pub disc_title: Option<String>,
+    pub tracks: Vec<TrackInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct TrackInfo {
+    pub position: usize,
+    pub title: String,
+    pub duration: Option<String>,
+    pub recording_mbid: String,
+    pub artist: Option<String>,
+}
+
+/// Structured output for release group releases (all versions).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseGroupReleasesResult {
+    pub release_group_title: String,
+    pub release_group_mbid: String,
+    pub artist: String,
+    pub releases: Vec<ReleaseVersionInfo>,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseVersionInfo {
+    pub title: String,
+    pub mbid: String,
+    pub date: Option<String>,
+    pub country: Option<String>,
+}
 
 /// Parameters for release search operations.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -225,35 +287,27 @@ impl MbReleaseTool {
                     return error_result(&format!("No releases found for query: {}", query));
                 }
 
-                let mut output = format!("Found {} releases:\n\n", releases.len());
-                for (i, release) in releases.iter().enumerate() {
-                    let artist = get_artist_name(&release.artist_credit);
-                    let year = release
-                        .date
-                        .as_ref()
-                        .and_then(|d| extract_year(&d.0))
-                        .unwrap_or_else(|| "Unknown".to_string());
+                let count = releases.len();
+                let release_infos: Vec<ReleaseSearchInfo> = releases
+                    .into_iter()
+                    .map(|r| ReleaseSearchInfo {
+                        title: r.title,
+                        mbid: r.id,
+                        artist: get_artist_name(&r.artist_credit),
+                        year: r.date.as_ref().and_then(|d| extract_year(&d.0)),
+                        country: r.country,
+                        barcode: r.barcode.filter(|b| !b.is_empty()),
+                    })
+                    .collect();
 
-                    output.push_str(&format!(
-                        "{}. **{}** by {} ({})\n   MBID: {}\n",
-                        i + 1,
-                        release.title,
-                        artist,
-                        year,
-                        release.id,
-                    ));
-                    if let Some(country) = &release.country {
-                        output.push_str(&format!("   Country: {}\n", country));
-                    }
-                    if let Some(barcode) = &release.barcode {
-                        if !barcode.is_empty() {
-                            output.push_str(&format!("   Barcode: {}\n", barcode));
-                        }
-                    }
-                    output.push('\n');
-                }
+                let structured_data = ReleaseSearchResult {
+                    releases: release_infos,
+                    total_count: count,
+                    query: query.to_string(),
+                };
 
-                success_result(output)
+                let summary = format!("Found {} release(s) matching '{}'", count, query);
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Release search failed: {:?}", e);
@@ -292,62 +346,64 @@ impl MbReleaseTool {
         match Release::fetch().id(&release_id).with_recordings().execute() {
             Ok(release) => {
                 let artist = get_artist_name(&release.artist_credit);
-                let mut output = format!(
-                    "**{}** by {}\nMBID: {}\n\n",
-                    release.title, artist, release.id
-                );
+                let mut total_tracks = 0;
+                let mut media_list = Vec::new();
 
                 if let Some(media) = &release.media {
-                    let mut track_num = 0;
                     for (disc_idx, medium) in media.iter().enumerate() {
-                        if media.len() > 1 {
-                            let disc_title = medium
-                                .title
-                                .as_ref()
-                                .map(|t| format!(" - {}", t))
-                                .unwrap_or_default();
-                            output.push_str(&format!(
-                                "\n**Disc {}{}**\n",
-                                disc_idx + 1,
-                                disc_title
-                            ));
-                        }
+                        let mut tracks = Vec::new();
 
-                        if let Some(tracks) = &medium.tracks {
-                            for track in tracks.iter().take(limit) {
-                                track_num += 1;
+                        if let Some(medium_tracks) = &medium.tracks {
+                            for track in medium_tracks.iter().take(limit) {
                                 if let Some(ref recording) = track.recording {
-                                    let duration = recording
-                                        .length
-                                        .map(|l| format_duration(l as u64))
-                                        .unwrap_or_else(|| "--:--".to_string());
-
+                                    total_tracks += 1;
                                     let track_artist = get_artist_name(&recording.artist_credit);
-                                    let artist_suffix = if track_artist != artist
-                                        && track_artist != "Unknown Artist"
-                                    {
-                                        format!(" ({})", track_artist)
-                                    } else {
-                                        String::new()
-                                    };
 
-                                    output.push_str(&format!(
-                                        "  {}. {} [{}]{}\n     MBID: {}\n",
-                                        track_num,
-                                        recording.title,
-                                        duration,
-                                        artist_suffix,
-                                        recording.id,
-                                    ));
+                                    tracks.push(TrackInfo {
+                                        position: total_tracks,
+                                        title: recording.title.clone(),
+                                        duration: recording
+                                            .length
+                                            .map(|l| format_duration(l as u64)),
+                                        recording_mbid: recording.id.clone(),
+                                        artist: if track_artist != artist
+                                            && track_artist != "Unknown Artist"
+                                        {
+                                            Some(track_artist)
+                                        } else {
+                                            None
+                                        },
+                                    });
                                 }
                             }
                         }
+
+                        media_list.push(Medium {
+                            disc_number: disc_idx + 1,
+                            disc_title: medium.title.clone(),
+                            tracks,
+                        });
                     }
-                } else {
-                    output.push_str("No track information available.\n");
                 }
 
-                success_result(output)
+                let structured_data = ReleaseRecordingsResult {
+                    release_title: release.title.clone(),
+                    release_mbid: release.id.clone(),
+                    artist: artist.clone(),
+                    media: media_list,
+                    total_tracks,
+                };
+
+                let summary = if total_tracks > 0 {
+                    format!(
+                        "Track listing for '{}' by {} ({} track(s))",
+                        release.title, artist, total_tracks
+                    )
+                } else {
+                    format!("No tracks available for '{}'", release.title)
+                };
+
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Failed to fetch release recordings: {:?}", e);
@@ -395,40 +451,43 @@ impl MbReleaseTool {
         {
             Ok(release_group) => {
                 let artist = get_artist_name(&release_group.artist_credit);
-                let mut output = format!(
-                    "**{}** by {}\nRelease Group MBID: {}\n\n",
-                    release_group.title, artist, release_group.id,
-                );
 
-                if let Some(releases) = &release_group.releases {
-                    output.push_str(&format!(
-                        "Found {} versions:\n\n",
-                        releases.len().min(limit)
-                    ));
-                    for (i, release) in releases.iter().take(limit).enumerate() {
-                        let date = release
-                            .date
-                            .as_ref()
-                            .map(|d| format_date(&d.0))
-                            .unwrap_or_else(|| "Unknown".to_string());
-
-                        output.push_str(&format!(
-                            "{}. **{}** ({})\n   MBID: {}\n",
-                            i + 1,
-                            release.title,
-                            date,
-                            release.id,
-                        ));
-                        if let Some(country) = &release.country {
-                            output.push_str(&format!("   Country: {}\n", country));
-                        }
-                        output.push('\n');
-                    }
+                let release_versions: Vec<ReleaseVersionInfo> = if let Some(releases) =
+                    &release_group.releases
+                {
+                    releases
+                        .iter()
+                        .take(limit)
+                        .map(|r| ReleaseVersionInfo {
+                            title: r.title.clone(),
+                            mbid: r.id.clone(),
+                            date: r.date.as_ref().map(|d| d.0.clone()),
+                            country: r.country.clone(),
+                        })
+                        .collect()
                 } else {
-                    output.push_str("No releases found for this release group.\n");
-                }
+                    Vec::new()
+                };
 
-                success_result(output)
+                let count = release_versions.len();
+                let structured_data = ReleaseGroupReleasesResult {
+                    release_group_title: release_group.title.clone(),
+                    release_group_mbid: release_group.id.clone(),
+                    artist: artist.clone(),
+                    releases: release_versions,
+                    total_count: count,
+                };
+
+                let summary = if count > 0 {
+                    format!(
+                        "Found {} version(s) of '{}' by {}",
+                        count, release_group.title, artist
+                    )
+                } else {
+                    format!("No versions found for '{}'", release_group.title)
+                };
+
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Failed to fetch release group: {:?}", e);

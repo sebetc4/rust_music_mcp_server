@@ -111,6 +111,62 @@ MCP_ACOUSTID_API_KEY=your_api_key_here
 - Better performance
 - No shared quota with other users
 
+### Security Configuration
+
+#### Path Security
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `MCP_ROOT_PATH` | Path | None | Root directory for all file operations. If set, restricts access to this directory and its subdirectories |
+| `MCP_ALLOW_SYMLINKS` | Boolean | `true` | Whether to follow symlinks. If `true`, symlinks are followed and validated; if `false`, symlinks pointing outside root are rejected |
+
+**Path Security Overview**:
+
+The path security system validates all file/directory paths used by filesystem tools (`fs_list_dir`, `fs_rename`, `read_metadata`, `write_metadata`, `mb_identify_record`) to ensure they stay within configured boundaries.
+
+**Key Features**:
+- ✅ **Path Traversal Protection**: Blocks `../../../etc/passwd` attacks
+- ✅ **Symlink Validation**: Validates symlink destinations are within bounds
+- ✅ **Relative Path Resolution**: Safely resolves relative paths like `./music`
+- ✅ **Canonical Path Validation**: Uses OS path canonicalization for security
+- ✅ **Clear Error Messages**: Users get explicit feedback when paths are rejected
+
+**Examples**:
+
+```bash
+# Development: No restrictions (default)
+# MCP_ROOT_PATH is not set - all paths allowed
+
+# Production: Restrict to music library
+MCP_ROOT_PATH=/home/user/music
+MCP_ALLOW_SYMLINKS=true
+
+# High security: No symlinks allowed
+MCP_ROOT_PATH=/var/music
+MCP_ALLOW_SYMLINKS=false
+```
+
+**Behavior**:
+
+When `MCP_ROOT_PATH` is set:
+- ✅ `/home/user/music/albums/song.mp3` → **ALLOWED**
+- ✅ `/home/user/music/../music/song.mp3` → **ALLOWED** (resolves to valid path)
+- ❌ `/home/user/documents/file.txt` → **BLOCKED**
+- ❌ `/home/user/music/../documents/file.txt` → **BLOCKED** (path traversal detected)
+
+When `MCP_ROOT_PATH` is **not** set:
+- ✅ All paths allowed (backwards compatible)
+- ⚠️ Warning logged at startup
+
+**Recommended Setup**:
+
+| Environment | MCP_ROOT_PATH | MCP_ALLOW_SYMLINKS | Rationale |
+|-------------|---------------|---------------------|-----------|
+| Development | Not set | N/A | Flexibility for testing |
+| Production | Always set | `true` | Security with flexibility |
+| High Security | Always set | `false` | Maximum security, no symlinks |
+| Docker | `/data` or `/music` | `true` | Container volume mount |
+
 ## Configuration Workflow
 
 ### 1. Startup Sequence
@@ -257,20 +313,66 @@ Config {
 }
 ```
 
-### 3. Production Deployment
+### 3. Path Security
+
+**⚠️ CRITICAL for Production**: Always set `MCP_ROOT_PATH` in production to prevent unauthorized file access.
+
+✅ **DO**:
+- Set `MCP_ROOT_PATH` to your music library directory
+- Use absolute paths for `MCP_ROOT_PATH`
+- Validate the root path exists before starting the server
+- Use Docker volume mounts aligned with `MCP_ROOT_PATH`
+- Log path validation errors for security monitoring
+- Test path restrictions before deploying
+
+❌ **DON'T**:
+- Leave `MCP_ROOT_PATH` unset in production
+- Use `/` (root filesystem) as `MCP_ROOT_PATH`
+- Disable path security for convenience
+- Ignore path validation warnings
+- Give write access outside your music directory
+
+**Example Production Setup**:
+
+```bash
+# Secure production configuration
+MCP_ROOT_PATH=/var/music/library
+MCP_ALLOW_SYMLINKS=true
+MCP_LOG_LEVEL=info
+
+# Server will only access files in /var/music/library and subdirectories
+# All path traversal attempts will be blocked and logged
+```
+
+**Security Threat Mitigation**:
+
+| Threat | Mitigation | Status |
+|--------|-----------|--------|
+| Path traversal (`../../../etc/passwd`) | Canonical path validation | ✅ Blocked |
+| Symlink attacks (link to `/etc`) | Symlink destination validation | ✅ Blocked |
+| Absolute path bypass (`/etc/shadow`) | Root directory boundary check | ✅ Blocked |
+| Relative path confusion | Path resolution before validation | ✅ Blocked |
+
+### 4. Production Deployment
 
 **Recommended approach**:
 
 ```bash
 # Set environment variables in your deployment system
 # Example: Docker
-docker run -e MCP_ACOUSTID_API_KEY=prod_key music_mcp_server
+docker run \
+  -e MCP_ACOUSTID_API_KEY=prod_key \
+  -e MCP_ROOT_PATH=/music \
+  -v /host/music:/music:ro \
+  music_mcp_server
 
 # Example: systemd service
 [Service]
 Environment="MCP_ACOUSTID_API_KEY=prod_key"
 Environment="MCP_TRANSPORT=tcp"
 Environment="MCP_TCP_PORT=3000"
+Environment="MCP_ROOT_PATH=/var/music/library"
+Environment="MCP_ALLOW_SYMLINKS=true"
 ```
 
 ## Examples
@@ -299,10 +401,19 @@ export MCP_TCP_PORT=3000
 export MCP_TCP_HOST=0.0.0.0
 export MCP_LOG_LEVEL=info
 export MCP_ACOUSTID_API_KEY=prod_key_xyz789
+export MCP_ROOT_PATH=/var/music/library  # IMPORTANT: Restrict filesystem access
+export MCP_ALLOW_SYMLINKS=true
 
 # Build and run
 cargo build --release --features tcp
 ./target/release/music_mcp_server
+```
+
+**Expected startup logs**:
+```
+INFO Path security enabled: root directory set to "/var/music/library"
+INFO Symlinks allowed: true
+INFO MCP server listening on tcp://0.0.0.0:3000
 ```
 
 ### Example 3: Testing with Custom Config

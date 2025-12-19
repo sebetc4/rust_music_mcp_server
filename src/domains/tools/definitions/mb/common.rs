@@ -54,6 +54,26 @@ pub fn success_result(content: String) -> CallToolResult {
     CallToolResult::success(vec![Content::text(content)])
 }
 
+/// Create a success result with both text summary and structured content.
+pub fn structured_result<T: serde::Serialize>(
+    summary: String,
+    data: T,
+) -> CallToolResult {
+    match serde_json::to_value(&data) {
+        Ok(structured) => CallToolResult {
+            content: vec![Content::text(summary)],
+            structured_content: Some(structured),
+            is_error: Some(false),
+            meta: None,
+        },
+        Err(e) => {
+            warn!("Failed to serialize structured content: {}", e);
+            // Fallback to text-only result
+            success_result(summary)
+        }
+    }
+}
+
 /// Get artist name from artist credit.
 pub fn get_artist_name(
     artist_credit: &Option<Vec<musicbrainz_rs::entity::artist_credit::ArtistCredit>>,

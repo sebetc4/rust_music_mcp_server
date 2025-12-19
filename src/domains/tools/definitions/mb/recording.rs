@@ -15,12 +15,12 @@ use rmcp::{
     model::{CallToolResult, Tool},
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info};
 
 use super::common::{
-    default_limit, error_result, format_date, format_duration, get_artist_name, is_mbid,
-    success_result, validate_limit,
+    default_limit, error_result, extract_year, format_duration, get_artist_name, is_mbid,
+    structured_result, validate_limit,
 };
 
 /// Parameters for recording search operations.
@@ -42,6 +42,70 @@ pub struct MbRecordingParams {
     pub limit: usize,
 }
 
+/// Structured output for recording search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct RecordingSearchResult {
+    pub recordings: Vec<RecordingSearchInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct RecordingSearchInfo {
+    pub title: String,
+    pub mbid: String,
+    pub artist: String,
+    pub duration: Option<String>,
+    pub disambiguation: Option<String>,
+}
+
+/// Structured output for single recording details (by MBID).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct RecordingDetails {
+    pub title: String,
+    pub mbid: String,
+    pub artist: String,
+    pub duration: Option<String>,
+    pub disambiguation: Option<String>,
+    pub artist_mbids: Vec<ArtistMbid>,
+    pub releases: Vec<RecordingReleaseInfo>,
+    pub genres: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ArtistMbid {
+    pub name: String,
+    pub mbid: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct RecordingReleaseInfo {
+    pub title: String,
+    pub mbid: String,
+    pub country: Option<String>,
+    pub year: Option<String>,
+}
+
+/// Structured output for recording releases search.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct RecordingReleasesResult {
+    pub recording_title: String,
+    pub recording_mbid: String,
+    pub recording_artist: String,
+    pub duration: Option<String>,
+    pub releases: Vec<ReleaseWithArtist>,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseWithArtist {
+    pub title: String,
+    pub mbid: String,
+    pub artist: String,
+    pub date: Option<String>,
+    pub country: Option<String>,
+}
+
 /// MusicBrainz Recording Search Tool implementation.
 #[derive(Debug, Clone)]
 pub struct MbRecordingTool;
@@ -52,7 +116,7 @@ impl MbRecordingTool {
 
     /// Tool description shown to clients.
     pub const DESCRIPTION: &'static str =
-        "Search for recordings (tracks/songs) in MusicBrainz and find which releases contain them.";
+        "Search for recordings (tracks/songs) in MusicBrainz and find which releases contain them. Returns structured data with concise summary including MBIDs, artists, durations, and release information.";
 
     pub fn new() -> Self {
         Self
@@ -206,131 +270,137 @@ impl MbRecordingTool {
 
         // If the query is a MusicBrainz ID (MBID), fetch the recording directly.
         if is_mbid(query) {
-            match Recording::fetch()
-                .id(query)
-                .with_artists()
-                .with_releases()
-                .with_genres()
-                .execute()
-            {
-                Ok(recording) => {
-                    let artist = get_artist_name(&recording.artist_credit);
-                    let duration = recording
-                        .length
-                        .map(|l| format_duration(l as u64))
-                        .unwrap_or_else(|| "--:--".to_string());
-
-                    let mut output = String::new();
-
-                    output.push_str("--- MusicBrainz Recording Details ---\n");
-                    output.push_str(&format!("**Title:** {}\n", recording.title));
-                    output.push_str(&format!("**Artist(s):** {}\n", artist));
-                    output.push_str(&format!("**⏱Duration:** {}\n", duration));
-                    output.push_str(&format!("**Recording MBID:** {}\n", recording.id));
-
-                    if let Some(ref disambiguation) = recording.disambiguation {
-                        if !disambiguation.is_empty() {
-                            output.push_str(&format!(
-                                "\n*Note de désambiguïsation: {}*\n",
-                                disambiguation
-                            ));
-                        }
-                    }
-
-                    if let Some(artists) = &recording.artist_credit {
-                        output.push_str("\n### Artist MBIDs\n");
-                        for artist_info in artists {
-                            output.push_str(&format!(
-                                "- {}: {}\n",
-                                artist_info.name, artist_info.artist.id
-                            ));
-                        }
-                    }
-
-                    if let Some(releases) = &recording.releases {
-                        if !releases.is_empty() {
-                            output.push_str(&format!(
-                                "\n### Found on {} Release(s)\n",
-                                releases.len()
-                            ));
-
-                            for release in releases.iter() {
-                                let country = release.country.as_deref().unwrap_or("?");
-                                let year = release
-                                    .date
-                                    .as_ref()
-                                    .map(|d| {
-                                        d.0.split('-').next().unwrap_or("Year N/A").to_string()
-                                    })
-                                    .unwrap_or_else(|| "Year N/A".to_string());
-
-                                output.push_str(&format!(
-                                    "• {} ({} / {}) - MBID: {}\n",
-                                    release.title, country, year, release.id
-                                ));
-                            }
-                        }
-                    }
-
-                    if let Some(genres) = &recording.genres {
-                        if !genres.is_empty() {
-                            output.push_str("\n### Genres\n");
-                            let genre_names: Vec<String> =
-                                genres.iter().map(|g| g.name.clone()).collect();
-                            output.push_str(&format!("- {}\n", genre_names.join(", ")));
-                        }
-                    }
-                    success_result(output)
-                }
-                Err(e) => {
-                    error!("Failed to fetch recording by MBID: {:?}", e);
-                    error_result(&format!("Failed to fetch recording: {}", e))
-                }
-            }
+            Self::fetch_recording_by_id(query)
         } else {
-            let search_query = RecordingSearchQuery::query_builder()
-                .recording(query)
-                .build();
+            Self::search_recordings_by_title(query, limit)
+        }
+    }
 
-            let search_result = Recording::search(search_query).execute();
+    /// Fetch a recording by its MBID with full details.
+    fn fetch_recording_by_id(mbid: &str) -> CallToolResult {
+        match Recording::fetch()
+            .id(mbid)
+            .with_artists()
+            .with_releases()
+            .with_genres()
+            .execute()
+        {
+            Ok(recording) => {
+                let artist = get_artist_name(&recording.artist_credit);
+                let duration = recording.length.map(|l| format_duration(l as u64));
 
-            match search_result {
-                Ok(result) => {
-                    let recordings: Vec<_> = result.entities.into_iter().take(limit).collect();
-                    if recordings.is_empty() {
-                        return error_result(&format!("No recordings found for query: {}", query));
-                    }
+                // Build artist MBIDs
+                let artist_mbids: Vec<ArtistMbid> = recording
+                    .artist_credit
+                    .as_ref()
+                    .map(|artists| {
+                        artists
+                            .iter()
+                            .map(|a| ArtistMbid {
+                                name: a.name.clone(),
+                                mbid: a.artist.id.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
-                    let mut output = format!("Found {} recordings:\n\n", recordings.len());
-                    for (i, recording) in recordings.iter().enumerate() {
-                        let artist = get_artist_name(&recording.artist_credit);
-                        let duration = recording
-                            .length
-                            .map(|l| format_duration(l as u64))
-                            .unwrap_or_else(|| "--:--".to_string());
+                // Build releases info
+                let releases: Vec<RecordingReleaseInfo> = recording
+                    .releases
+                    .as_ref()
+                    .map(|rels| {
+                        rels.iter()
+                            .map(|r| RecordingReleaseInfo {
+                                title: r.title.clone(),
+                                mbid: r.id.clone(),
+                                country: r.country.clone(),
+                                year: r.date.as_ref().and_then(|d| extract_year(&d.0)),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
-                        output.push_str(&format!(
-                            "{}. **{}** by {} [{}]\n   MBID: {}\n",
-                            i + 1,
-                            recording.title,
-                            artist,
-                            duration,
-                            recording.id,
-                        ));
-                        if let Some(ref disambiguation) = recording.disambiguation {
-                            if !disambiguation.is_empty() {
-                                output.push_str(&format!("   Note: {}\n", disambiguation));
-                            }
-                        }
-                        output.push('\n');
-                    }
+                // Build genres list
+                let genres: Vec<String> = recording
+                    .genres
+                    .as_ref()
+                    .map(|gs| gs.iter().map(|g| g.name.clone()).collect())
+                    .unwrap_or_default();
 
-                    success_result(output)
+                let structured_data = RecordingDetails {
+                    title: recording.title.clone(),
+                    mbid: recording.id,
+                    artist: artist.clone(),
+                    duration: duration.clone(),
+                    disambiguation: recording
+                        .disambiguation
+                        .filter(|d| !d.is_empty()),
+                    artist_mbids,
+                    releases: releases.clone(),
+                    genres: genres.clone(),
+                };
+
+                // Build summary
+                let summary = if releases.is_empty() {
+                    format!("'{}' by {} ({})", recording.title, artist, duration.unwrap_or_else(|| "unknown duration".to_string()))
+                } else {
+                    format!(
+                        "'{}' by {} ({}) - found on {} release(s)",
+                        recording.title,
+                        artist,
+                        duration.unwrap_or_else(|| "unknown duration".to_string()),
+                        releases.len()
+                    )
+                };
+
+                structured_result(summary, structured_data)
+            }
+            Err(e) => {
+                error!("Failed to fetch recording by MBID: {:?}", e);
+                error_result(&format!("Failed to fetch recording: {}", e))
+            }
+        }
+    }
+
+    /// Search for recordings by title.
+    fn search_recordings_by_title(query: &str, limit: usize) -> CallToolResult {
+        let search_query = RecordingSearchQuery::query_builder()
+            .recording(query)
+            .build();
+
+        let search_result = Recording::search(search_query).execute();
+
+        match search_result {
+            Ok(result) => {
+                let recordings: Vec<_> = result.entities.into_iter().take(limit).collect();
+                if recordings.is_empty() {
+                    return error_result(&format!("No recordings found for query: {}", query));
                 }
-                Err(e) => {
-                    error!("Recording search failed: {:?}", e);
-                    error_result(&format!("Recording search failed: {}", e))
-                }
+
+                let count = recordings.len();
+                let recording_infos: Vec<RecordingSearchInfo> = recordings
+                    .into_iter()
+                    .map(|r| RecordingSearchInfo {
+                        title: r.title,
+                        mbid: r.id,
+                        artist: get_artist_name(&r.artist_credit),
+                        duration: r.length.map(|l| format_duration(l as u64)),
+                        disambiguation: r.disambiguation.filter(|d| !d.is_empty()),
+                    })
+                    .collect();
+
+                let structured_data = RecordingSearchResult {
+                    recordings: recording_infos,
+                    total_count: count,
+                    query: query.to_string(),
+                };
+
+                let summary = format!("Found {} recording(s) matching '{}'", count, query);
+                structured_result(summary, structured_data)
+            }
+            Err(e) => {
+                error!("Recording search failed: {:?}", e);
+                error_result(&format!("Recording search failed: {}", e))
             }
         }
     }
@@ -371,47 +441,46 @@ impl MbRecordingTool {
         {
             Ok(recording) => {
                 let artist = get_artist_name(&recording.artist_credit);
-                let duration = recording
-                    .length
-                    .map(|l| format_duration(l as u64))
-                    .unwrap_or_else(|| "--:--".to_string());
+                let duration = recording.length.map(|l| format_duration(l as u64));
 
-                let mut output = format!(
-                    "**{}** by {} [{}]\nRecording MBID: {}\n\n",
-                    recording.title, artist, duration, recording.id
-                );
+                let releases: Vec<ReleaseWithArtist> = recording
+                    .releases
+                    .as_ref()
+                    .map(|rels| {
+                        rels.iter()
+                            .take(limit)
+                            .map(|r| ReleaseWithArtist {
+                                title: r.title.clone(),
+                                mbid: r.id.clone(),
+                                artist: get_artist_name(&r.artist_credit),
+                                date: r.date.as_ref().and_then(|d| extract_year(&d.0)),
+                                country: r.country.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
-                if let Some(releases) = &recording.releases {
-                    output.push_str(&format!(
-                        "Found on {} releases:\n\n",
-                        releases.len().min(limit)
-                    ));
-                    for (i, release) in releases.iter().take(limit).enumerate() {
-                        let release_artist = get_artist_name(&release.artist_credit);
-                        let date = release
-                            .date
-                            .as_ref()
-                            .map(|d| format_date(&d.0))
-                            .unwrap_or_else(|| "Unknown".to_string());
+                let count = releases.len();
 
-                        output.push_str(&format!(
-                            "{}. **{}** by {} ({})\n   MBID: {}\n",
-                            i + 1,
-                            release.title,
-                            release_artist,
-                            date,
-                            release.id,
-                        ));
-                        if let Some(country) = &release.country {
-                            output.push_str(&format!("   Country: {}\n", country));
-                        }
-                        output.push('\n');
-                    }
+                let structured_data = RecordingReleasesResult {
+                    recording_title: recording.title.clone(),
+                    recording_mbid: recording.id,
+                    recording_artist: artist.clone(),
+                    duration: duration.clone(),
+                    releases,
+                    total_count: count,
+                };
+
+                let summary = if count == 0 {
+                    format!("'{}' by {} - no releases found", recording.title, artist)
                 } else {
-                    output.push_str("No releases found containing this recording.\n");
-                }
+                    format!(
+                        "'{}' by {} - found on {} release(s)",
+                        recording.title, artist, count
+                    )
+                };
 
-                success_result(output)
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Failed to fetch recording releases: {:?}", e);

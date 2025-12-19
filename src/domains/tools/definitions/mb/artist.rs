@@ -16,11 +16,11 @@ use rmcp::{
     model::{CallToolResult, Tool},
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info};
 
 use super::common::{
-    default_limit, error_result, extract_year, is_mbid, success_result, validate_limit,
+    default_limit, error_result, extract_year, is_mbid, structured_result, validate_limit,
 };
 
 /// Parameters for artist search operations.
@@ -42,6 +42,40 @@ pub struct MbArtistParams {
     pub limit: usize,
 }
 
+/// Structured output for artist search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ArtistSearchResult {
+    pub artists: Vec<ArtistSearchInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ArtistSearchInfo {
+    pub name: String,
+    pub mbid: String,
+    pub country: Option<String>,
+    pub area: Option<String>,
+    pub disambiguation: Option<String>,
+}
+
+/// Structured output for artist releases search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ArtistReleasesResult {
+    pub artist_name: String,
+    pub artist_mbid: String,
+    pub releases: Vec<ArtistReleaseInfo>,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ArtistReleaseInfo {
+    pub title: String,
+    pub mbid: String,
+    pub year: Option<String>,
+    pub country: Option<String>,
+}
+
 /// MusicBrainz Artist Search Tool implementation.
 #[derive(Debug, Clone)]
 pub struct MbArtistTool;
@@ -51,7 +85,7 @@ impl MbArtistTool {
     pub const NAME: &'static str = "mb_artist_search";
 
     /// Tool description shown to clients.
-    pub const DESCRIPTION: &'static str = "Search for artists and their releases in the MusicBrainz database. Supports artist name search and finding all releases by an artist.";
+    pub const DESCRIPTION: &'static str = "Search for artists and their releases in the MusicBrainz database. Supports artist name search and finding all releases by an artist. Returns structured data with concise summary and detailed information including MBIDs, country, area, and disambiguation.";
 
     pub fn new() -> Self {
         Self
@@ -205,7 +239,6 @@ impl MbArtistTool {
         info!("Searching for artists matching: {}", query);
 
         let search_query = ArtistSearchQuery::query_builder().artist(query).build();
-
         let search_result = Artist::search(search_query).execute();
 
         match search_result {
@@ -215,29 +248,30 @@ impl MbArtistTool {
                     return error_result(&format!("No artists found for query: {}", query));
                 }
 
-                let mut output = format!("Found {} artists:\n\n", artists.len());
-                for (i, artist) in artists.iter().enumerate() {
-                    output.push_str(&format!(
-                        "{}. **{}**\n   MBID: {}\n",
-                        i + 1,
-                        artist.name,
-                        artist.id,
-                    ));
-                    if let Some(ref country) = artist.country {
-                        if !country.is_empty() {
-                            output.push_str(&format!("   Country: {}\n", country));
-                        }
-                    }
-                    if let Some(area) = &artist.area {
-                        output.push_str(&format!("   Area: {}\n", area.name));
-                    }
-                    if !artist.disambiguation.is_empty() {
-                        output.push_str(&format!("   Note: {}\n", artist.disambiguation));
-                    }
-                    output.push('\n');
-                }
+                let count = artists.len();
+                let artist_infos: Vec<ArtistSearchInfo> = artists
+                    .into_iter()
+                    .map(|a| ArtistSearchInfo {
+                        name: a.name,
+                        mbid: a.id,
+                        country: a.country.filter(|c| !c.is_empty()),
+                        area: a.area.map(|area| area.name),
+                        disambiguation: if a.disambiguation.is_empty() {
+                            None
+                        } else {
+                            Some(a.disambiguation)
+                        },
+                    })
+                    .collect();
 
-                success_result(output)
+                let structured_data = ArtistSearchResult {
+                    artists: artist_infos,
+                    total_count: count,
+                    query: query.to_string(),
+                };
+
+                let summary = format!("Found {} artist(s) matching '{}'", count, query);
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Artist search failed: {:?}", e);
@@ -290,31 +324,26 @@ impl MbArtistTool {
                     return error_result(&format!("No releases found for artist: {}", artist_name));
                 }
 
-                let mut output = format!(
-                    "Found {} releases by **{}**:\n\n",
-                    releases.len(),
-                    artist_name
-                );
-                for (i, release) in releases.iter().enumerate() {
-                    let year = release
-                        .date
-                        .as_ref()
-                        .and_then(|d| extract_year(&d.0))
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    output.push_str(&format!(
-                        "{}. **{}** ({})\n   MBID: {}\n",
-                        i + 1,
-                        release.title,
-                        year,
-                        release.id,
-                    ));
-                    if let Some(country) = &release.country {
-                        output.push_str(&format!("   Country: {}\n", country));
-                    }
-                    output.push('\n');
-                }
+                let count = releases.len();
+                let release_infos: Vec<ArtistReleaseInfo> = releases
+                    .into_iter()
+                    .map(|r| ArtistReleaseInfo {
+                        title: r.title,
+                        mbid: r.id,
+                        year: r.date.as_ref().and_then(|d| extract_year(&d.0)),
+                        country: r.country,
+                    })
+                    .collect();
 
-                success_result(output)
+                let structured_data = ArtistReleasesResult {
+                    artist_name: artist_name.clone(),
+                    artist_mbid: artist_id,
+                    releases: release_infos,
+                    total_count: count,
+                };
+
+                let summary = format!("Found {} release(s) by '{}'", count, artist_name);
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Release search failed: {:?}", e);

@@ -11,7 +11,6 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::fmt::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -29,6 +28,50 @@ const MAX_RETRIES: u32 = 3;
 const BASE_DELAY_MS: u64 = 1000;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 const MAX_RESULT_LIMIT: usize = 10;
+
+// ============================================================================
+// Structured Output Types
+// ============================================================================
+
+/// Structured output for audio identification results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct IdentificationResult {
+    pub file: String,
+    pub metadata_level: String,
+    pub matches: Vec<FingerprintMatch>,
+    pub status: String,
+}
+
+/// A single fingerprint match from AcoustID.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct FingerprintMatch {
+    pub rank: usize,
+    pub confidence: f64,
+    pub acoustid: String,
+    pub recordings: Vec<RecordingMatch>,
+}
+
+/// Recording information from a match.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct RecordingMatch {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artists: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_groups: Option<Vec<ReleaseGroupMatch>>,
+}
+
+/// Release group information.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseGroupMatch {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
+}
 
 // ============================================================================
 // Tool Parameters
@@ -120,6 +163,7 @@ struct AcoustIDRecording {
     duration: Option<f64>,
     #[serde(default)]
     artists: Vec<AcoustIDArtist>,
+    #[allow(dead_code)] // Used for deserialization but not read in current implementation
     #[serde(default)]
     releases: Vec<AcoustIDRelease>,
     #[serde(default)]
@@ -150,8 +194,8 @@ struct AcoustIDReleaseGroup {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Used for deserialization but not read in current implementation
 struct AcoustIDRelease {
-    #[allow(dead_code)]
     #[serde(default)]
     id: Option<String>,
     #[serde(default)]
@@ -162,7 +206,6 @@ struct AcoustIDRelease {
     date: Option<AcoustIDDate>,
     #[serde(default)]
     track_count: Option<u32>,
-    #[allow(dead_code)]
     #[serde(default)]
     medium_count: Option<u32>,
     #[serde(default)]
@@ -170,13 +213,12 @@ struct AcoustIDRelease {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Used for deserialization but not read in current implementation
 struct AcoustIDMedium {
-    #[allow(dead_code)]
     #[serde(default)]
     position: Option<u32>,
     #[serde(default)]
     format: Option<String>,
-    #[allow(dead_code)]
     #[serde(default)]
     track_count: Option<u32>,
     #[serde(default)]
@@ -196,22 +238,11 @@ struct AcoustIDTrack {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Used for deserialization but not read in current implementation
 struct AcoustIDDate {
     year: Option<u32>,
     month: Option<u32>,
     day: Option<u32>,
-}
-
-impl AcoustIDDate {
-    /// Format date in ISO 8601 format (YYYY-MM-DD, YYYY-MM, or YYYY).
-    fn format(&self) -> String {
-        match (self.year, self.month, self.day) {
-            (Some(y), Some(m), Some(d)) => format!("{y:04}-{m:02}-{d:02}"),
-            (Some(y), Some(m), None) => format!("{y:04}-{m:02}"),
-            (Some(y), None, None) => format!("{y:04}"),
-            _ => "Unknown".to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -296,8 +327,11 @@ impl MbIdentifyRecordTool {
          - Files have been renamed or lack proper ID3 tags\n\
          \n\
          This tool analyzes the actual audio waveform and matches it against the AcoustID database\n\
-         (linked to MusicBrainz). Returns detailed metadata including MusicBrainz Recording IDs,\n\
-         artist names, album information, and more.\n\
+         (linked to MusicBrainz). Returns structured data with concise summary including:\n\
+         - Confidence scores for each match\n\
+         - MusicBrainz Recording IDs\n\
+         - Artist names and titles\n\
+         - Release groups and album information (with full metadata level)\n\
          \n\
          Supports all common audio formats: MP3, FLAC, WAV, OGG, M4A, AAC, WMA, OPUS, and more.";
 
@@ -314,9 +348,21 @@ impl MbIdentifyRecordTool {
             .unwrap_or_default();
 
         match Self::identify_audio_internal(params, api_key, config) {
-            Ok(content) => {
+            Ok((summary, structured_data)) => {
                 info!("Audio identification completed successfully");
-                CallToolResult::success(vec![Content::text(content)])
+                match serde_json::to_value(&structured_data) {
+                    Ok(structured) => CallToolResult {
+                        content: vec![Content::text(summary)],
+                        structured_content: Some(structured),
+                        is_error: Some(false),
+                        meta: None,
+                    },
+                    Err(e) => {
+                        warn!("Failed to serialize structured content: {}", e);
+                        // Fallback to text-only
+                        CallToolResult::success(vec![Content::text(summary)])
+                    }
+                }
             }
             Err(e) => {
                 error!("Audio identification failed: {}", e);
@@ -330,7 +376,7 @@ impl MbIdentifyRecordTool {
         params: &MbIdentifyRecordParams,
         api_key: &str,
         config: &Config,
-    ) -> Result<String, IdentificationError> {
+    ) -> Result<(String, IdentificationResult), IdentificationError> {
         // Validate path security first
         validate_path(&params.file_path, config).map_err(|e| {
             IdentificationError::FileNotFound(format!("Path security validation failed: {}", e))
@@ -348,8 +394,8 @@ impl MbIdentifyRecordTool {
         // Query API
         let response = Self::query_acoustid(api_key, &fingerprint_data, params.metadata_level)?;
 
-        // Format results
-        Self::format_results(&response, &params.file_path, limit, &params.metadata_level)
+        // Build structured result and summary
+        Self::build_results(&response, &params.file_path, limit, &params.metadata_level)
     }
 
     /// Validate that the file exists and is accessible.
@@ -565,263 +611,171 @@ impl MbIdentifyRecordTool {
         Ok(acoustid_response)
     }
 
-    /// Helper to format duration from seconds.
-    fn format_duration(seconds: u32) -> String {
-        let minutes = seconds / 60;
-        let secs = seconds % 60;
-        format!("{minutes}:{secs:02}")
-    }
 
-    /// Helper to format release info.
-    fn format_release_info(output: &mut String, release: &AcoustIDRelease) {
-        if let Some(country) = &release.country {
-            write!(output, "       Country: {country}").unwrap();
-        }
-        if let Some(date) = &release.date {
-            write!(output, " | Date: {}", date.format()).unwrap();
-        }
-        writeln!(output).unwrap();
-
-        if let Some(track_count) = release.track_count {
-            writeln!(output, "       Tracks: {track_count}").unwrap();
-        }
-    }
-
-    /// Format the results into a readable string.
-    fn format_results(
+    /// Build both structured results and text summary.
+    fn build_results(
         response: &AcoustIDResponse,
         file_path: &str,
         limit: usize,
         metadata_level: &MetadataLevel,
-    ) -> Result<String, IdentificationError> {
+    ) -> Result<(String, IdentificationResult), IdentificationError> {
         if response.results.is_empty() {
             return Err(IdentificationError::NoMatches);
         }
 
-        let mut output = String::with_capacity(2048); // Pre-allocate for better performance
-
-        writeln!(&mut output, "=== Audio Fingerprint Analysis ===").unwrap();
-        writeln!(&mut output, "File: {file_path}").unwrap();
-        writeln!(&mut output, "Metadata Level: {metadata_level:?}").unwrap();
-        writeln!(
-            &mut output,
-            "\nFound {} potential match(es)\n",
-            response.results.len()
-        )
-        .unwrap();
-
-        let mut match_count = 0;
+        // Build structured data
+        let mut matches = Vec::new();
 
         for (i, result) in response.results.iter().take(limit).enumerate() {
-            let confidence = (result.score * 100.0) as u32;
+            let mut recordings = Vec::new();
 
-            writeln!(
-                &mut output,
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            )
-            .unwrap();
-            writeln!(&mut output, "Match #{} (Confidence: {confidence}%)", i + 1).unwrap();
-            writeln!(&mut output, "AcoustID: {}", result.id).unwrap();
+            for recording in &result.recordings {
+                // Extract title and artists based on metadata level
+                let (title_opt, artists_opt) = match metadata_level {
+                    MetadataLevel::Minimal => (None, None),
+                    MetadataLevel::Basic | MetadataLevel::Full => {
+                        let (title, artists_vec) = if !recording.releasegroups.is_empty() {
+                            let rg = &recording.releasegroups[0];
+                            let track_title = rg
+                                .releases
+                                .first()
+                                .and_then(|rel| rel.mediums.first())
+                                .and_then(|med| med.tracks.first())
+                                .and_then(|track| track.title.as_ref())
+                                .map(|s| s.to_string());
 
-            if result.recordings.is_empty() {
-                writeln!(
-                    &mut output,
-                    "⚠ No MusicBrainz recordings linked to this AcoustID"
-                )
-                .unwrap();
-            } else {
-                writeln!(&mut output, "\nMusicBrainz Recording(s):").unwrap();
-                for (rec_idx, recording) in result.recordings.iter().enumerate() {
-                    writeln!(&mut output, "\n  Recording #{}", rec_idx + 1).unwrap();
-                    writeln!(&mut output, "  ID: {}", recording.id).unwrap();
-
-                    // Display metadata based on level
-                    match metadata_level {
-                        MetadataLevel::Minimal => {
-                            // Only ID is shown (already displayed above)
-                        }
-                        MetadataLevel::Basic | MetadataLevel::Full => {
-                            // Try to get title and artists from releasegroups first, fallback to recording fields
-                            let (title_opt, artists_vec) = if !recording.releasegroups.is_empty() {
-                                let rg = &recording.releasegroups[0];
-
-                                // Extract track title from the first release's first medium's first track
-                                let track_title = rg
-                                    .releases
-                                    .first()
-                                    .and_then(|rel| rel.mediums.first())
-                                    .and_then(|med| med.tracks.first())
-                                    .and_then(|track| track.title.as_ref())
-                                    .map(|s| s.to_string());
-
-                                // Use releasegroup artists if available, otherwise recording artists
-                                let artists = if !rg.artists.is_empty() {
-                                    rg.artists.clone()
-                                } else {
-                                    recording.artists.clone()
-                                };
-
-                                (track_title.or_else(|| recording.title.clone()), artists)
+                            let artists = if !rg.artists.is_empty() {
+                                rg.artists.clone()
                             } else {
-                                (recording.title.clone(), recording.artists.clone())
+                                recording.artists.clone()
                             };
 
-                            if let Some(title) = &title_opt {
-                                writeln!(&mut output, "  Title: {title}").unwrap();
-                            }
+                            (track_title.or_else(|| recording.title.clone()), artists)
+                        } else {
+                            (recording.title.clone(), recording.artists.clone())
+                        };
 
-                            if let Some(duration) = recording.duration {
-                                let formatted = Self::format_duration(duration as u32);
-                                writeln!(&mut output, "  Duration: {formatted}").unwrap();
-                            }
+                        let artist_names = if !artists_vec.is_empty() {
+                            Some(artists_vec.iter().map(|a| a.name.clone()).collect())
+                        } else {
+                            None
+                        };
 
-                            if !artists_vec.is_empty() {
-                                let artist_names: Vec<_> =
-                                    artists_vec.iter().map(|a| a.name.as_str()).collect();
-                                writeln!(&mut output, "  Artist(s): {}", artist_names.join(", "))
-                                    .unwrap();
-                            }
-
-                            // Full metadata includes releasegroups and releases
-                            if matches!(metadata_level, MetadataLevel::Full) {
-                                // Show releasegroups first (contains album info)
-                                if !recording.releasegroups.is_empty() {
-                                    writeln!(&mut output, "\n  Release Groups:").unwrap();
-                                    for (rg_idx, rg) in
-                                        recording.releasegroups.iter().take(3).enumerate()
-                                    {
-                                        writeln!(
-                                            &mut output,
-                                            "    {}. {} ({})",
-                                            rg_idx + 1,
-                                            rg.title.as_deref().unwrap_or("Untitled"),
-                                            rg.r#type.as_deref().unwrap_or("Unknown")
-                                        )
-                                        .unwrap();
-
-                                        if let Some(rel) = rg.releases.first() {
-                                            Self::format_release_info(&mut output, rel);
-
-                                            if let Some(format) =
-                                                &rel.mediums.first().and_then(|m| m.format.as_ref())
-                                            {
-                                                writeln!(&mut output, "       Format: {format}")
-                                                    .unwrap();
-                                            }
-                                        }
-                                    }
-                                    if recording.releasegroups.len() > 3 {
-                                        writeln!(
-                                            &mut output,
-                                            "    ... and {} more release group(s)",
-                                            recording.releasegroups.len() - 3
-                                        )
-                                        .unwrap();
-                                    }
-                                }
-
-                                // Also show direct releases if available
-                                if !recording.releases.is_empty()
-                                    && recording.releasegroups.is_empty()
-                                {
-                                    writeln!(&mut output, "\n  Releases:").unwrap();
-                                    for (rel_idx, release) in
-                                        recording.releases.iter().take(3).enumerate()
-                                    {
-                                        writeln!(
-                                            &mut output,
-                                            "    {}. {}",
-                                            rel_idx + 1,
-                                            release.title.as_deref().unwrap_or("Untitled")
-                                        )
-                                        .unwrap();
-
-                                        Self::format_release_info(&mut output, release);
-                                    }
-
-                                    if recording.releases.len() > 3 {
-                                        writeln!(
-                                            &mut output,
-                                            "    ... and {} more release(s)",
-                                            recording.releases.len() - 3
-                                        )
-                                        .unwrap();
-                                    }
-                                }
-                            }
-                        }
+                        (title, artist_names)
                     }
+                };
 
-                    match_count += 1;
-                }
+                // Extract release groups for Full metadata level
+                let release_groups = if matches!(metadata_level, MetadataLevel::Full) {
+                    let groups: Vec<ReleaseGroupMatch> = recording
+                        .releasegroups
+                        .iter()
+                        .map(|rg| ReleaseGroupMatch {
+                            name: rg.title.clone().unwrap_or_else(|| "Untitled".to_string()),
+                            r#type: rg.r#type.clone(),
+                        })
+                        .collect();
+
+                    if groups.is_empty() {
+                        None
+                    } else {
+                        Some(groups)
+                    }
+                } else {
+                    None
+                };
+
+                recordings.push(RecordingMatch {
+                    id: recording.id.clone(),
+                    title: title_opt,
+                    duration: recording.duration.map(|d| d as u32),
+                    artists: artists_opt,
+                    release_groups,
+                });
             }
-            writeln!(&mut output).unwrap();
+
+            matches.push(FingerprintMatch {
+                rank: i + 1,
+                confidence: result.score,
+                acoustid: result.id.clone(),
+                recordings,
+            });
         }
 
-        writeln!(
-            &mut output,
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        )
-        .unwrap();
+        let structured_data = IdentificationResult {
+            file: file_path.to_string(),
+            metadata_level: format!("{:?}", metadata_level).to_lowercase(),
+            matches,
+            status: "success".to_string(),
+        };
 
-        if match_count > 0 {
-            match metadata_level {
-                MetadataLevel::Minimal => {
-                    writeln!(
-                        &mut output,
-                        "✓ Next step: Use 'mb_record_search' with one of the Recording IDs above"
-                    )
-                    .unwrap();
-                    writeln!(
-                        &mut output,
-                        "  to retrieve full metadata (title, artist, album, etc.)"
-                    )
-                    .unwrap();
-                }
-                MetadataLevel::Basic => {
-                    writeln!(
-                        &mut output,
-                        "✓ Basic metadata retrieved. For more details (releases, labels, etc.):"
-                    )
-                    .unwrap();
-                    writeln!(
-                        &mut output,
-                        "  - Use 'metadata_level: full' for complete information"
-                    )
-                    .unwrap();
-                    writeln!(
-                        &mut output,
-                        "  - Or use 'mb_record_search' with a Recording ID"
-                    )
-                    .unwrap();
-                }
-                MetadataLevel::Full => {
-                    writeln!(
-                        &mut output,
-                        "✓ Full metadata retrieved from AcoustID database"
-                    )
-                    .unwrap();
-                    writeln!(
-                        &mut output,
-                        "  Use 'mb_record_search' for additional MusicBrainz details if needed"
-                    )
-                    .unwrap();
-                }
-            }
+        // Build text summary
+        let summary = Self::build_text_summary(&structured_data, metadata_level);
+
+        Ok((summary, structured_data))
+    }
+
+    /// Build a concise text summary from structured data.
+    fn build_text_summary(
+        data: &IdentificationResult,
+        metadata_level: &MetadataLevel,
+    ) -> String {
+        if data.matches.is_empty() {
+            return "No matches found".to_string();
+        }
+
+        // Build a concise summary
+        let total_matches = data.matches.len();
+        let best_match = &data.matches[0];
+        let confidence_pct = (best_match.confidence * 100.0) as u32;
+
+        // Try to get title and artist from best match
+        let best_recording = best_match.recordings.first();
+
+        let (title_str, artist_str) = if let Some(rec) = best_recording {
+            let title = rec.title.as_deref().unwrap_or("Unknown");
+            let artists = rec.artists.as_ref()
+                .map(|a| a.join(", "))
+                .unwrap_or_else(|| "Unknown Artist".to_string());
+            (title, artists)
         } else {
-            writeln!(
-                &mut output,
-                "⚠ Fingerprint matched but no MusicBrainz data available."
-            )
-            .unwrap();
-            writeln!(
-                &mut output,
-                "  This audio may not be in the MusicBrainz database yet."
-            )
-            .unwrap();
-        }
+            ("Unknown", "Unknown Artist".to_string())
+        };
 
-        Ok(output)
+        match metadata_level {
+            MetadataLevel::Minimal => {
+                format!(
+                    "Identified audio: {} match(es) found (best: {}% confidence, Recording ID: {})",
+                    total_matches,
+                    confidence_pct,
+                    best_recording.map(|r| r.id.as_str()).unwrap_or("N/A")
+                )
+            }
+            MetadataLevel::Basic => {
+                format!(
+                    "Identified: '{}' by {} ({}% confidence, {} match(es))",
+                    title_str, artist_str, confidence_pct, total_matches
+                )
+            }
+            MetadataLevel::Full => {
+                let release_count = best_recording
+                    .and_then(|r| r.release_groups.as_ref())
+                    .map(|rg| rg.len())
+                    .unwrap_or(0);
+
+                if release_count > 0 {
+                    format!(
+                        "Identified: '{}' by {} ({}% confidence, {} release group(s), {} total match(es))",
+                        title_str, artist_str, confidence_pct, release_count, total_matches
+                    )
+                } else {
+                    format!(
+                        "Identified: '{}' by {} ({}% confidence, {} match(es))",
+                        title_str, artist_str, confidence_pct, total_matches
+                    )
+                }
+            }
+        }
     }
 
     /// HTTP handler for this tool (for HTTP transport).

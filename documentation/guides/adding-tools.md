@@ -151,6 +151,7 @@ fn your_business_logic(params: &YourToolParams) -> Result<String, String> {
 - Return `CallToolResult::error()` for errors
 - Return `CallToolResult::success()` for success
 - Use `Content::text()` for text responses
+- **See [Tool Output Formats Guide](../reference/tool-output-formats.md)** for complete output format reference
 
 ### Step 5: Implement HTTP Handler (Optional)
 

@@ -1,17 +1,19 @@
 # mb_release_search
 
-Search for releases (albums, singles, etc.) and optionally retrieve tracklists or alternative versions.
+Search for releases (albums, singles, etc.), retrieve tracklists, and find all versions of a release group.
 
 ---
 
 ## Overview
 
 The `mb_release_search` tool allows you to:
-- Search for releases by name and artist
-- Look up releases by MusicBrainz ID (MBID)
+- Search for releases by title
 - Get complete tracklists with recording MBIDs
-- Find all versions of a release (remasters, editions, countries)
-- Access detailed release information (label, barcode, format)
+- Find all versions of a release group (remasters, editions, countries)
+- Access detailed release information with structured JSON data
+- Returns concise text summaries with structured output
+
+**Output Format**: This tool follows MCP standards, returning a short text summary plus structured JSON data for programmatic access.
 
 ---
 
@@ -19,43 +21,38 @@ The `mb_release_search` tool allows you to:
 
 ```typescript
 {
-  release?: string,                    // Release name to search
-  release_mbid?: string,               // Release MBID for direct lookup
-  artist?: string,                     // Filter by artist name
-  include_tracklist?: boolean,         // Include track listing (default: false)
-  find_release_group_versions?: boolean, // Find other versions (default: false)
-  limit?: number                       // Max results, 1-100 (default: 25)
+  search_type: "release" | "release_recordings" | "release_group_releases",  // Type of search (required)
+  query: string,                                                              // Release title or MBID (required)
+  limit?: number                                                              // Max results, 1-100 (default: 10)
 }
 ```
 
 ### Parameter Details
 
-- **release** (optional, but required if no release_mbid)
-  - Release name for search (e.g., "OK Computer")
-  - Searches across all releases in MusicBrainz
+- **search_type** (required)
+  - `"release"`: Search for releases by title
+  - `"release_recordings"`: Get all tracks/recordings in a release
+  - `"release_group_releases"`: Get all versions of a release group
 
-- **release_mbid** (optional, but required if no release)
-  - Direct lookup by MBID (e.g., "52709206-8816-3c12-9ff6-f957f2f1eecf")
-  - Faster and more accurate than name search
-
-- **artist** (optional)
-  - Filter results by artist name
-  - Highly recommended to narrow down search results
-
-- **include_tracklist** (optional)
-  - `false` (default): Return release info only
-  - `true`: Include complete track listing with durations and MBIDs
-
-- **find_release_group_versions** (optional)
-  - `false` (default): Show matching releases only
-  - `true`: Find all versions (different countries, formats, reissues)
+- **query** (required)
+  - Release or release group title for search (e.g., "OK Computer")
+  - Or MBID for direct lookup (e.g., "52709206-8816-3c12-9ff6-f957f2f1eecf")
+  - Tool automatically detects MBID format
 
 - **limit** (optional)
   - Range: 1-100
-  - Default: 25
+  - Default: 10
   - Applies to search results
 
-**Note**: Either `release` or `release_mbid` must be provided.
+---
+
+## Output Format
+
+The tool returns:
+1. **Text Summary**: A concise one-line description of results (e.g., "Found 10 release(s) matching 'OK Computer'")
+2. **Structured JSON Data**: Complete data in a standardized format for programmatic access
+
+This follows MCP standards for structured tool output, providing both human-readable summaries and machine-parseable data.
 
 ---
 
@@ -63,34 +60,40 @@ The `mb_release_search` tool allows you to:
 
 ### Example 1: Search Release by Name
 
-Basic release search with artist filter.
+Basic release search by title.
 
 **Request**:
 ```json
 {
   "name": "mb_release_search",
   "arguments": {
-    "release": "OK Computer",
-    "artist": "Radiohead"
+    "search_type": "release",
+    "query": "OK Computer"
   }
 }
 ```
 
-**Response** (truncated):
+**Text Summary**:
 ```
-Release Search Results
-======================
+Found 10 release(s) matching 'OK Computer'
+```
 
-Found 25 release(s) (showing first 25)
-
-1. OK Computer
-   MBID: 52709206-8816-3c12-9ff6-f957f2f1eecf
-   Artist: Radiohead
-   Date: 1997-05-21
-   Country: GB
-   Format: CD
-   Status: Official
-   Packaging: Jewel Case
+**Structured Data**:
+```json
+{
+  "releases": [
+    {
+      "title": "OK Computer",
+      "mbid": "52709206-8816-3c12-9ff6-f957f2f1eecf",
+      "artist": "Radiohead",
+      "year": "1997",
+      "country": "GB",
+      "barcode": "724384260927"
+    }
+  ],
+  "total_count": 10,
+  "query": "OK Computer"
+}
 ```
 
 ---
@@ -104,33 +107,47 @@ Retrieve complete track information including durations and MBIDs.
 {
   "name": "mb_release_search",
   "arguments": {
-    "release_mbid": "52709206-8816-3c12-9ff6-f957f2f1eecf",
-    "include_tracklist": true
+    "search_type": "release_recordings",
+    "query": "52709206-8816-3c12-9ff6-f957f2f1eecf"
   }
 }
 ```
 
-**Response** (truncated):
+**Text Summary**:
 ```
-Release: OK Computer
-MBID: 52709206-8816-3c12-9ff6-f957f2f1eecf
-Artist: Radiohead
-Date: 1997-05-21
-Country: GB
-Label: Parlophone
+Track listing for 'OK Computer' by Radiohead (12 track(s))
+```
 
-Tracklist (12 tracks, 53:21):
-
- 1. Airbag                      4:44
-    Recording MBID: d4f52c25-e80e-4839-9484-8ce5a1c54d89
-
- 2. Paranoid Android            6:23
-    Recording MBID: 6bf6f137-f7e5-4e40-880f-db35b3f9c272
-
- 3. Subterranean Homesick Alien 4:27
-    Recording MBID: e2c3c210-70ee-4e12-8723-5c6a7f22c53e
-
-[... tracks 4-12 ...]
+**Structured Data**:
+```json
+{
+  "release_title": "OK Computer",
+  "release_mbid": "52709206-8816-3c12-9ff6-f957f2f1eecf",
+  "artist": "Radiohead",
+  "media": [
+    {
+      "disc_number": 1,
+      "disc_title": null,
+      "tracks": [
+        {
+          "position": 1,
+          "title": "Airbag",
+          "duration": "4:44",
+          "recording_mbid": "d4f52c25-e80e-4839-9484-8ce5a1c54d89",
+          "artist": null
+        },
+        {
+          "position": 2,
+          "title": "Paranoid Android",
+          "duration": "6:23",
+          "recording_mbid": "6bf6f137-f7e5-4e40-880f-db35b3f9c272",
+          "artist": null
+        }
+      ]
+    }
+  ],
+  "total_tracks": 12
+}
 ```
 
 ---
@@ -144,20 +161,41 @@ Discover all editions of a release (remasters, different countries, formats).
 {
   "name": "mb_release_search",
   "arguments": {
-    "release": "Discovery",
-    "artist": "Daft Punk",
-    "find_release_group_versions": true,
+    "search_type": "release_group_releases",
+    "query": "Discovery",
     "limit": 5
   }
 }
 ```
 
-**Response** shows:
-- Original 2001 CD release (France)
-- 2001 vinyl release (US)
-- 2009 remaster (various countries)
-- Digital releases
-- Special editions
+**Text Summary**:
+```
+Found 5 version(s) of 'Discovery' by Daft Punk
+```
+
+**Structured Data**:
+```json
+{
+  "release_group_title": "Discovery",
+  "release_group_mbid": "b81bcdb6-4223-43e9-a6a3-90537f8c0eb5",
+  "artist": "Daft Punk",
+  "releases": [
+    {
+      "title": "Discovery",
+      "mbid": "...",
+      "date": "2001-03-07",
+      "country": "FR"
+    },
+    {
+      "title": "Discovery",
+      "mbid": "...",
+      "date": "2001-03-13",
+      "country": "US"
+    }
+  ],
+  "total_count": 5
+}
+```
 
 ---
 
@@ -167,8 +205,8 @@ Discover all editions of a release (remasters, different countries, formats).
 Get accurate release details for metadata tagging:
 ```json
 {
-  "release": "The Dark Side of the Moon",
-  "artist": "Pink Floyd"
+  "search_type": "release",
+  "query": "The Dark Side of the Moon"
 }
 ```
 
@@ -176,8 +214,8 @@ Get accurate release details for metadata tagging:
 Extract all tracks with MBIDs for a release:
 ```json
 {
-  "release_mbid": "...",
-  "include_tracklist": true
+  "search_type": "release_recordings",
+  "query": "52709206-8816-3c12-9ff6-f957f2f1eecf"
 }
 ```
 
@@ -185,9 +223,8 @@ Extract all tracks with MBIDs for a release:
 Find all versions to choose the right one:
 ```json
 {
-  "release": "Abbey Road",
-  "artist": "The Beatles",
-  "find_release_group_versions": true,
+  "search_type": "release_group_releases",
+  "query": "Abbey Road",
   "limit": 50
 }
 ```
@@ -196,9 +233,8 @@ Find all versions to choose the right one:
 Confirm which edition you have:
 ```json
 {
-  "release": "Random Access Memories",
-  "artist": "Daft Punk",
-  "find_release_group_versions": true
+  "search_type": "release_group_releases",
+  "query": "Random Access Memories"
 }
 ```
 
@@ -206,8 +242,8 @@ Confirm which edition you have:
 Get recording identifiers for further operations:
 ```json
 {
-  "release_mbid": "...",
-  "include_tracklist": true
+  "search_type": "release_recordings",
+  "query": "release-mbid-here"
 }
 ```
 
@@ -215,26 +251,75 @@ Get recording identifiers for further operations:
 
 ## Response Fields
 
-### Release Information
+### Release Search (`search_type: "release"`)
 
-- **Title**: Release name
-- **MBID**: Unique MusicBrainz release identifier
-- **Artist**: Primary artist name(s)
-- **Date**: Release date (YYYY-MM-DD or YYYY)
-- **Country**: ISO country code
-- **Label**: Record label name
-- **Barcode**: Barcode/UPC if available
-- **Format**: CD, Vinyl, Digital, Cassette, etc.
-- **Status**: Official, Promotion, Bootleg, Pseudo-Release
-- **Packaging**: Jewel Case, Digipak, Box, etc.
+Returns `ReleaseSearchResult` with:
 
-### Track Information (when include_tracklist=true)
+```typescript
+{
+  releases: [
+    {
+      title: string,              // Release name
+      mbid: string,               // Unique MusicBrainz release identifier
+      artist: string,             // Primary artist name(s)
+      year: string | null,        // Release year (e.g., "1997")
+      country: string | null,     // ISO country code
+      barcode: string | null      // Barcode/UPC if available
+    }
+  ],
+  total_count: number,            // Number of releases returned
+  query: string                   // Original search query
+}
+```
 
-- **Position**: Track number
-- **Title**: Track name
-- **Duration**: Track length (MM:SS)
-- **Recording MBID**: Unique recording identifier
-- **Artist**: Track artist (if different from release artist)
+### Release Recordings (`search_type: "release_recordings"`)
+
+Returns `ReleaseRecordingsResult` with:
+
+```typescript
+{
+  release_title: string,          // Release name
+  release_mbid: string,           // Release MBID
+  artist: string,                 // Primary artist
+  media: [
+    {
+      disc_number: number,        // Disc number (1-based)
+      disc_title: string | null,  // Disc title if multi-disc
+      tracks: [
+        {
+          position: number,       // Track number
+          title: string,          // Track name
+          duration: string | null,// Track length (MM:SS)
+          recording_mbid: string, // Unique recording identifier
+          artist: string | null   // Track artist (if different from release artist)
+        }
+      ]
+    }
+  ],
+  total_tracks: number            // Total number of tracks
+}
+```
+
+### Release Group Releases (`search_type: "release_group_releases"`)
+
+Returns `ReleaseGroupReleasesResult` with:
+
+```typescript
+{
+  release_group_title: string,    // Release group title
+  release_group_mbid: string,     // Release group MBID
+  artist: string,                 // Artist name
+  releases: [
+    {
+      title: string,              // Release title
+      mbid: string,               // Release MBID
+      date: string | null,        // Release date (YYYY-MM-DD or YYYY)
+      country: string | null      // ISO country code
+    }
+  ],
+  total_count: number             // Number of versions returned
+}
+```
 
 ---
 
@@ -276,24 +361,24 @@ Get recording identifiers for further operations:
 
 ### Pattern 1: Complete Album Metadata Extraction
 ```
-1. mb_release_search (release: "name", artist: "name") → Get MBID
-2. mb_release_search (release_mbid: ..., include_tracklist: true) → Get full data
+1. mb_release_search (search_type: "release", query: "name") → Get MBID
+2. mb_release_search (search_type: "release_recordings", query: mbid) → Get full tracklist
 3. Use recording MBIDs for individual track processing
 ```
 
 ### Pattern 2: Find Best Release Version
 ```
-1. mb_release_search (release: "name", artist: "name", find_release_group_versions: true)
-2. Compare dates, countries, formats
+1. mb_release_search (search_type: "release_group_releases", query: "name")
+2. Compare dates, countries from structured data
 3. Select preferred version's MBID
-4. mb_release_search (release_mbid: ..., include_tracklist: true) → Get final data
+4. mb_release_search (search_type: "release_recordings", query: mbid) → Get final data
 ```
 
 ### Pattern 3: Bulk Tracklist Export
 ```
-1. mb_artist_search (artist: "name", include_releases: true) → Get all release MBIDs
+1. mb_artist_search (search_type: "artist_releases", query: "name") → Get all release MBIDs
 2. For each release MBID:
-   mb_release_search (release_mbid: ..., include_tracklist: true)
+   mb_release_search (search_type: "release_recordings", query: mbid)
 ```
 
 ---

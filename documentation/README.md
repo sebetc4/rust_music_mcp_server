@@ -20,11 +20,13 @@ Welcome to the comprehensive technical documentation for the Music MCP Server pr
 - [External APIs](architecture/external-apis.md) - MusicBrainz and AcoustID integration details
 
 ### Tools Reference
-- [Filesystem Tools](tools/filesystem-tools.md) - `fs_list_dir`, `fs_rename`
+- [Filesystem Tools](tools/fs/) - `fs_list_dir` (with recursive support), `fs_rename`
 - [Metadata Tools](tools/metadata-tools.md) - `read_metadata`, `write_metadata`
-- [MusicBrainz Tools](tools/musicbrainz-tools.md) - All 5 MB tools with examples
+- [MusicBrainz Tools](tools/mb/) - All 5 MB tools with examples
 
 ### Deep Dives
+- [Tool Output Formats](reference/tool-output-formats.md) - **NEW**: Complete MCP output format guide (text, structured, resources, errors)
+- [Path Security](reference/path-security.md) - Path validation, threat model, and security implementation
 - [Error Handling](reference/error-handling.md) - Error types, patterns, and best practices
 - [Dependencies](reference/dependencies.md) - Key crates and their usage
 - [Music Domain](reference/music-domain.md) - Music concepts and metadata normalization
@@ -50,11 +52,18 @@ documentation/
 │   └── testing.md                 # Testing approach
 │
 ├── tools/                          # Individual tool documentation
-│   ├── filesystem-tools.md        # File operations (2 tools)
-│   ├── metadata-tools.md          # Audio metadata (2 tools)
-│   └── musicbrainz-tools.md       # MusicBrainz integration (5 tools)
+│   ├── fs/                        # Filesystem tools (2 tools)
+│   │   ├── README.md              # Overview and quick reference
+│   │   ├── fs_list_dir.md         # Directory listing (with recursion)
+│   │   └── fs_rename.md           # Rename/move files
+│   ├── mb/                        # MusicBrainz tools (5 tools)
+│   │   ├── README.md              # Overview and quick reference
+│   │   └── ...                    # Individual tool docs
+│   └── metadata-tools.md          # Audio metadata (2 tools)
 │
 └── reference/                      # In-depth technical topics
+    ├── tool-output-formats.md     # MCP output format guide (NEW)
+    ├── path-security.md           # Path validation & security
     ├── error-handling.md          # Error types & patterns
     ├── dependencies.md            # Crate documentation
     └── music-domain.md            # Domain concepts
@@ -68,7 +77,7 @@ The Music MCP Server is a **Rust-based MCP (Model Context Protocol) server** des
 
 - **Audio fingerprinting** via Chromaprint/AcoustID
 - **Metadata enrichment** from MusicBrainz
-- **Safe file operations** with dry-run support
+- **Safe file operations** with dry-run support and **path security validation**
 - **Multiple transport layers** (STDIO, TCP, HTTP)
 
 ### Technology Stack

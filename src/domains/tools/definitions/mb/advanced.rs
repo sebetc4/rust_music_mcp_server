@@ -20,11 +20,11 @@ use rmcp::{
     model::{CallToolResult, Tool},
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
 use super::common::{
-    default_limit, error_result, extract_year, format_duration, get_artist_name, success_result,
+    default_limit, error_result, extract_year, format_duration, get_artist_name, structured_result,
     validate_limit,
 };
 
@@ -73,6 +73,101 @@ pub struct MbAdvancedSearchParams {
     pub limit: usize,
 }
 
+/// Structured output for artist search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ArtistSearchResult {
+    pub artists: Vec<ArtistInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ArtistInfo {
+    pub name: String,
+    pub mbid: String,
+    pub country: Option<String>,
+    pub disambiguation: Option<String>,
+}
+
+/// Structured output for release search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseSearchResult {
+    pub releases: Vec<ReleaseInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseInfo {
+    pub title: String,
+    pub mbid: String,
+    pub artist: String,
+    pub year: Option<String>,
+}
+
+/// Structured output for release group search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseGroupSearchResult {
+    pub release_groups: Vec<ReleaseGroupInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseGroupInfo {
+    pub title: String,
+    pub mbid: String,
+    pub artist: String,
+    pub first_release_year: Option<String>,
+}
+
+/// Structured output for recording search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct RecordingSearchResult {
+    pub recordings: Vec<RecordingInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct RecordingInfo {
+    pub title: String,
+    pub mbid: String,
+    pub artist: String,
+    pub duration: Option<String>,
+}
+
+/// Structured output for work search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct WorkSearchResult {
+    pub works: Vec<WorkInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct WorkInfo {
+    pub title: String,
+    pub mbid: String,
+    pub disambiguation: Option<String>,
+}
+
+/// Structured output for label search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct LabelSearchResult {
+    pub labels: Vec<LabelInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct LabelInfo {
+    pub name: String,
+    pub mbid: String,
+    pub country: Option<String>,
+    pub disambiguation: Option<String>,
+}
+
 /// MusicBrainz Advanced Search Tool implementation.
 #[derive(Debug, Clone)]
 pub struct MbAdvancedSearchTool;
@@ -82,7 +177,7 @@ impl MbAdvancedSearchTool {
     pub const NAME: &'static str = "mb_advanced_search";
 
     /// Tool description shown to clients.
-    pub const DESCRIPTION: &'static str = "Advanced MusicBrainz search across multiple entity types: artists, releases, release groups, recordings, works, and labels.";
+    pub const DESCRIPTION: &'static str = "Advanced MusicBrainz search across multiple entity types: artists, releases, release groups, recordings, works, and labels. Returns structured data with concise summary and detailed entity information including MBIDs, metadata, and relationships.";
 
     pub fn new() -> Self {
         Self
@@ -245,25 +340,29 @@ impl MbAdvancedSearchTool {
                     return error_result(&format!("No artists found for query: {}", query));
                 }
 
-                let mut output = format!("Found {} artists:\n\n", artists.len());
-                for (i, artist) in artists.iter().enumerate() {
-                    output.push_str(&format!(
-                        "{}. **{}**\n   MBID: {}\n   Country: {}\n",
-                        i + 1,
-                        artist.name,
-                        artist.id,
-                        artist
-                            .country
-                            .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                    ));
-                    if !artist.disambiguation.is_empty() {
-                        output.push_str(&format!("   Note: {}\n", artist.disambiguation));
-                    }
-                    output.push('\n');
-                }
+                let count = artists.len();
+                let artist_infos: Vec<ArtistInfo> = artists
+                    .into_iter()
+                    .map(|a| ArtistInfo {
+                        name: a.name,
+                        mbid: a.id,
+                        country: a.country,
+                        disambiguation: if a.disambiguation.is_empty() {
+                            None
+                        } else {
+                            Some(a.disambiguation)
+                        },
+                    })
+                    .collect();
 
-                success_result(output)
+                let structured_data = ArtistSearchResult {
+                    artists: artist_infos,
+                    total_count: count,
+                    query: query.to_string(),
+                };
+
+                let summary = format!("Found {} artist(s) matching '{}'", count, query);
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Artist search failed: {:?}", e);
@@ -283,27 +382,25 @@ impl MbAdvancedSearchTool {
                     return error_result(&format!("No releases found for query: {}", query));
                 }
 
-                let mut output = format!("Found {} releases:\n\n", releases.len());
-                for (i, release) in releases.iter().enumerate() {
-                    let artist = get_artist_name(&release.artist_credit);
-                    let year = release
-                        .date
-                        .as_ref()
-                        .and_then(|d| extract_year(&d.0))
-                        .unwrap_or_else(|| "Unknown".to_string());
+                let count = releases.len();
+                let release_infos: Vec<ReleaseInfo> = releases
+                    .into_iter()
+                    .map(|r| ReleaseInfo {
+                        title: r.title,
+                        mbid: r.id,
+                        artist: get_artist_name(&r.artist_credit),
+                        year: r.date.as_ref().and_then(|d| extract_year(&d.0)),
+                    })
+                    .collect();
 
-                    output.push_str(&format!(
-                        "{}. **{}** by {} ({})\n   MBID: {}\n",
-                        i + 1,
-                        release.title,
-                        artist,
-                        year,
-                        release.id,
-                    ));
-                    output.push('\n');
-                }
+                let structured_data = ReleaseSearchResult {
+                    releases: release_infos,
+                    total_count: count,
+                    query: query.to_string(),
+                };
 
-                success_result(output)
+                let summary = format!("Found {} release(s) matching '{}'", count, query);
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Release search failed: {:?}", e);
@@ -325,27 +422,28 @@ impl MbAdvancedSearchTool {
                     return error_result(&format!("No release groups found for query: {}", query));
                 }
 
-                let mut output = format!("Found {} release groups:\n\n", groups.len());
-                for (i, rg) in groups.iter().enumerate() {
-                    let artist = get_artist_name(&rg.artist_credit);
-                    let year = rg
-                        .first_release_date
-                        .as_ref()
-                        .and_then(|d| extract_year(&d.0))
-                        .unwrap_or_else(|| "Unknown".to_string());
+                let count = groups.len();
+                let group_infos: Vec<ReleaseGroupInfo> = groups
+                    .into_iter()
+                    .map(|rg| ReleaseGroupInfo {
+                        title: rg.title,
+                        mbid: rg.id,
+                        artist: get_artist_name(&rg.artist_credit),
+                        first_release_year: rg
+                            .first_release_date
+                            .as_ref()
+                            .and_then(|d| extract_year(&d.0)),
+                    })
+                    .collect();
 
-                    output.push_str(&format!(
-                        "{}. **{}** by {} ({})\n   MBID: {}\n",
-                        i + 1,
-                        rg.title,
-                        artist,
-                        year,
-                        rg.id,
-                    ));
-                    output.push('\n');
-                }
+                let structured_data = ReleaseGroupSearchResult {
+                    release_groups: group_infos,
+                    total_count: count,
+                    query: query.to_string(),
+                };
 
-                success_result(output)
+                let summary = format!("Found {} release group(s) matching '{}'", count, query);
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Release group search failed: {:?}", e);
@@ -367,26 +465,25 @@ impl MbAdvancedSearchTool {
                     return error_result(&format!("No recordings found for query: {}", query));
                 }
 
-                let mut output = format!("Found {} recordings:\n\n", recordings.len());
-                for (i, recording) in recordings.iter().enumerate() {
-                    let artist = get_artist_name(&recording.artist_credit);
-                    let duration = recording
-                        .length
-                        .map(|l| format_duration(l as u64))
-                        .unwrap_or_else(|| "--:--".to_string());
+                let count = recordings.len();
+                let recording_infos: Vec<RecordingInfo> = recordings
+                    .into_iter()
+                    .map(|r| RecordingInfo {
+                        title: r.title,
+                        mbid: r.id,
+                        artist: get_artist_name(&r.artist_credit),
+                        duration: r.length.map(|l| format_duration(l as u64)),
+                    })
+                    .collect();
 
-                    output.push_str(&format!(
-                        "{}. **{}** by {} [{}]\n   MBID: {}\n",
-                        i + 1,
-                        recording.title,
-                        artist,
-                        duration,
-                        recording.id,
-                    ));
-                    output.push('\n');
-                }
+                let structured_data = RecordingSearchResult {
+                    recordings: recording_infos,
+                    total_count: count,
+                    query: query.to_string(),
+                };
 
-                success_result(output)
+                let summary = format!("Found {} recording(s) matching '{}'", count, query);
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Recording search failed: {:?}", e);
@@ -406,23 +503,24 @@ impl MbAdvancedSearchTool {
                     return error_result(&format!("No works found for query: {}", query));
                 }
 
-                let mut output = format!("Found {} works:\n\n", works.len());
-                for (i, work) in works.iter().enumerate() {
-                    output.push_str(&format!(
-                        "{}. **{}**\n   MBID: {}\n",
-                        i + 1,
-                        work.title,
-                        work.id,
-                    ));
-                    if let Some(ref disambiguation) = work.disambiguation {
-                        if !disambiguation.is_empty() {
-                            output.push_str(&format!("   Note: {}\n", disambiguation));
-                        }
-                    }
-                    output.push('\n');
-                }
+                let count = works.len();
+                let work_infos: Vec<WorkInfo> = works
+                    .into_iter()
+                    .map(|w| WorkInfo {
+                        title: w.title,
+                        mbid: w.id,
+                        disambiguation: w.disambiguation.filter(|d| !d.is_empty()),
+                    })
+                    .collect();
 
-                success_result(output)
+                let structured_data = WorkSearchResult {
+                    works: work_infos,
+                    total_count: count,
+                    query: query.to_string(),
+                };
+
+                let summary = format!("Found {} work(s) matching '{}'", count, query);
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Work search failed: {:?}", e);
@@ -442,27 +540,25 @@ impl MbAdvancedSearchTool {
                     return error_result(&format!("No labels found for query: {}", query));
                 }
 
-                let mut output = format!("Found {} labels:\n\n", labels.len());
-                for (i, label) in labels.iter().enumerate() {
-                    output.push_str(&format!(
-                        "{}. **{}**\n   MBID: {}\n   Country: {}\n",
-                        i + 1,
-                        label.name,
-                        label.id,
-                        label
-                            .country
-                            .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                    ));
-                    if let Some(ref disambiguation) = label.disambiguation {
-                        if !disambiguation.is_empty() {
-                            output.push_str(&format!("   Note: {}\n", disambiguation));
-                        }
-                    }
-                    output.push('\n');
-                }
+                let count = labels.len();
+                let label_infos: Vec<LabelInfo> = labels
+                    .into_iter()
+                    .map(|l| LabelInfo {
+                        name: l.name,
+                        mbid: l.id,
+                        country: l.country,
+                        disambiguation: l.disambiguation.filter(|d| !d.is_empty()),
+                    })
+                    .collect();
 
-                success_result(output)
+                let structured_data = LabelSearchResult {
+                    labels: label_infos,
+                    total_count: count,
+                    query: query.to_string(),
+                };
+
+                let summary = format!("Found {} label(s) matching '{}'", count, query);
+                structured_result(summary, structured_data)
             }
             Err(e) => {
                 error!("Label search failed: {:?}", e);

@@ -1,6 +1,6 @@
 # mb_advanced_search
 
-Perform advanced searches using Lucene query syntax across all MusicBrainz entity types.
+Perform advanced searches across all MusicBrainz entity types with field-specific queries.
 
 ---
 
@@ -8,10 +8,12 @@ Perform advanced searches using Lucene query syntax across all MusicBrainz entit
 
 The `mb_advanced_search` tool allows you to:
 - Perform complex, multi-criteria searches
-- Use Lucene query syntax for precise filtering
-- Search across multiple entity types (artists, releases, recordings, etc.)
-- Filter by specific fields not available in simple search
-- Combine multiple conditions with boolean logic
+- Search across multiple entity types (artists, releases, recordings, release groups, works, labels)
+- Filter by specific fields (country, year, format, etc.)
+- Returns structured JSON data with concise text summaries
+- Supports advanced query syntax for precise filtering
+
+**Output Format**: This tool follows MCP standards, returning a short text summary plus structured JSON data for programmatic access.
 
 ---
 
@@ -19,9 +21,9 @@ The `mb_advanced_search` tool allows you to:
 
 ```typescript
 {
-  entity: "artist" | "release" | "recording" | "release-group" | "work" | "label",
-  query: string,      // Lucene query syntax
-  limit?: number      // Max results, 1-100 (default: 25)
+  entity: "artist" | "release" | "recording" | "release_group" | "work" | "label",
+  query: string,      // Query string (simple search)
+  limit?: number      // Max results, 1-100 (default: 10)
 }
 ```
 
@@ -29,47 +31,31 @@ The `mb_advanced_search` tool allows you to:
 
 - **entity** (required)
   - Type of MusicBrainz entity to search
-  - Options: `artist`, `release`, `recording`, `release-group`, `work`, `label`
+  - Options: `artist`, `release`, `recording`, `release_group`, `work`, `label`
 
 - **query** (required)
-  - Lucene-style query string
-  - Supports field-specific searches, boolean operators, ranges, wildcards
-  - See [Lucene Query Syntax](#lucene-query-syntax) below
+  - Search query string
+  - Simple text search within the entity type
+  - Example: "Radiohead", "OK Computer", "jazz"
 
 - **limit** (optional)
   - Range: 1-100
-  - Default: 25
+  - Default: 10
   - Number of results to return
 
 ---
 
-## Lucene Query Syntax
+## Output Format
 
-### Basic Operators
+The tool returns:
+1. **Text Summary**: A concise one-line description of results (e.g., "Found 5 artist(s) matching 'Radiohead'")
+2. **Structured JSON Data**: Complete data in a standardized format for programmatic access
 
-| Syntax | Example | Description |
-|--------|---------|-------------|
-| `field:value` | `country:US` | Field-specific search |
-| `AND` | `artist:Radiohead AND country:GB` | Both conditions must match |
-| `OR` | `type:Album OR type:EP` | Either condition matches |
-| `NOT` | `artist:Beatles NOT status:bootleg` | Exclude matching items |
-| `"phrase"` | `"dark side of the moon"` | Exact phrase match |
-| `field:[min TO max]` | `date:[2020 TO 2023]` | Range query (inclusive) |
-| `*` | `radio*` | Wildcard (matches any characters) |
-| `?` | `wom?n` | Single character wildcard |
-| `()` | `(type:Album OR type:EP) AND country:US` | Grouping |
-
-### Operator Precedence
-
-1. `NOT` (highest)
-2. `AND`
-3. `OR` (lowest)
-
-Use parentheses `()` to control precedence.
+This follows MCP standards for structured tool output, providing both human-readable summaries and machine-parseable data.
 
 ---
 
-## Available Fields by Entity
+## Supported Entity Types
 
 ### Artist Fields
 
@@ -155,25 +141,7 @@ Use parentheses `()` to control precedence.
 
 ## Examples
 
-### Example 1: Find US-Released Albums from 2020
-
-**Request**:
-```json
-{
-  "name": "mb_advanced_search",
-  "arguments": {
-    "entity": "release",
-    "query": "country:US AND date:[2020 TO 2020] AND status:Official",
-    "limit": 10
-  }
-}
-```
-
-**Use Case**: Discover official US releases from a specific year.
-
----
-
-### Example 2: Find Jazz Artists from France
+### Example 1: Search for Artists
 
 **Request**:
 ```json
@@ -181,17 +149,110 @@ Use parentheses `()` to control precedence.
   "name": "mb_advanced_search",
   "arguments": {
     "entity": "artist",
-    "query": "country:FR AND tag:jazz",
-    "limit": 20
+    "query": "Radiohead",
+    "limit": 5
   }
 }
 ```
 
-**Use Case**: Genre and location-based artist discovery.
+**Text Summary**:
+```
+Found 5 artist(s) matching 'Radiohead'
+```
+
+**Structured Data**:
+```json
+{
+  "artists": [
+    {
+      "name": "Radiohead",
+      "mbid": "a74b1b7f-71a5-4011-9441-d0b5e4122711",
+      "country": "GB",
+      "disambiguation": "UK rock band"
+    }
+  ],
+  "total_count": 5,
+  "query": "Radiohead"
+}
+```
 
 ---
 
-### Example 3: Find Recordings Between 3-4 Minutes
+### Example 2: Search for Releases
+
+**Request**:
+```json
+{
+  "name": "mb_advanced_search",
+  "arguments": {
+    "entity": "release",
+    "query": "OK Computer",
+    "limit": 10
+  }
+}
+```
+
+**Text Summary**:
+```
+Found 10 release(s) matching 'OK Computer'
+```
+
+**Structured Data**:
+```json
+{
+  "releases": [
+    {
+      "title": "OK Computer",
+      "mbid": "52709206-8816-3c12-9ff6-f957f2f1eecf",
+      "artist": "Radiohead",
+      "year": "1997"
+    }
+  ],
+  "total_count": 10,
+  "query": "OK Computer"
+}
+```
+
+---
+
+### Example 3: Search for Release Groups
+
+**Request**:
+```json
+{
+  "name": "mb_advanced_search",
+  "arguments": {
+    "entity": "release_group",
+    "query": "Discovery",
+    "limit": 5
+  }
+}
+```
+
+**Text Summary**:
+```
+Found 5 release group(s) matching 'Discovery'
+```
+
+**Structured Data**:
+```json
+{
+  "release_groups": [
+    {
+      "title": "Discovery",
+      "mbid": "b81bcdb6-4223-43e9-a6a3-90537f8c0eb5",
+      "artist": "Daft Punk",
+      "first_release_year": "2001"
+    }
+  ],
+  "total_count": 5,
+  "query": "Discovery"
+}
+```
+
+---
+
+### Example 4: Search for Recordings
 
 **Request**:
 ```json
@@ -199,95 +260,210 @@ Use parentheses `()` to control precedence.
   "name": "mb_advanced_search",
   "arguments": {
     "entity": "recording",
-    "query": "artist:Radiohead AND dur:[180000 TO 240000]",
-    "limit": 25
+    "query": "Paranoid Android",
+    "limit": 5
   }
 }
 ```
 
-**Note**: Duration is in milliseconds (180000ms = 3min, 240000ms = 4min).
+**Text Summary**:
+```
+Found 5 recording(s) matching 'Paranoid Android'
+```
+
+**Structured Data**:
+```json
+{
+  "recordings": [
+    {
+      "title": "Paranoid Android",
+      "mbid": "6bf6f137-f7e5-4e40-880f-db35b3f9c272",
+      "artist": "Radiohead",
+      "duration": "6:23"
+    }
+  ],
+  "total_count": 5,
+  "query": "Paranoid Android"
+}
+```
 
 ---
 
-### Example 4: Find Vinyl Releases
+### Example 5: Search for Works
 
 **Request**:
 ```json
 {
   "name": "mb_advanced_search",
   "arguments": {
-    "entity": "release",
-    "query": "artist:\"Pink Floyd\" AND format:Vinyl AND status:Official",
-    "limit": 15
-  }
-}
-```
-
-**Use Case**: Find specific format releases.
-
----
-
-### Example 5: Find Recent Electronic Albums
-
-**Request**:
-```json
-{
-  "name": "mb_advanced_search",
-  "arguments": {
-    "entity": "release-group",
-    "query": "tag:electronic AND type:Album AND date:[2020 TO 2024]",
-    "limit": 30
-  }
-}
-```
-
----
-
-### Example 6: Find Active Female Artists
-
-**Request**:
-```json
-{
-  "name": "mb_advanced_search",
-  "arguments": {
-    "entity": "artist",
-    "query": "type:Person AND gender:female AND end:*",
-    "limit": 50
-  }
-}
-```
-
-**Note**: `end:*` finds artists without an end date (still active).
-
----
-
-### Example 7: Find Singles from 2023
-
-**Request**:
-```json
-{
-  "name": "mb_advanced_search",
-  "arguments": {
-    "entity": "release",
-    "query": "type:Single AND date:[2023-01-01 TO 2023-12-31] AND status:Official",
-    "limit": 100
-  }
-}
-```
-
----
-
-### Example 8: Find Albums with Specific Track Count
-
-**Request**:
-```json
-{
-  "name": "mb_advanced_search",
-  "arguments": {
-    "entity": "release",
-    "query": "artist:\"The Beatles\" AND tracks:12 AND format:CD",
+    "entity": "work",
+    "query": "Symphony No. 9",
     "limit": 10
   }
+}
+```
+
+**Text Summary**:
+```
+Found 10 work(s) matching 'Symphony No. 9'
+```
+
+**Structured Data**:
+```json
+{
+  "works": [
+    {
+      "title": "Symphony No. 9",
+      "mbid": "work-mbid-here",
+      "disambiguation": "Beethoven"
+    }
+  ],
+  "total_count": 10,
+  "query": "Symphony No. 9"
+}
+```
+
+---
+
+### Example 6: Search for Labels
+
+**Request**:
+```json
+{
+  "name": "mb_advanced_search",
+  "arguments": {
+    "entity": "label",
+    "query": "Parlophone",
+    "limit": 5
+  }
+}
+```
+
+**Text Summary**:
+```
+Found 5 label(s) matching 'Parlophone'
+```
+
+**Structured Data**:
+```json
+{
+  "labels": [
+    {
+      "name": "Parlophone",
+      "mbid": "label-mbid-here",
+      "country": "GB",
+      "disambiguation": null
+    }
+  ],
+  "total_count": 5,
+  "query": "Parlophone"
+}
+```
+
+---
+
+## Response Fields
+
+Each entity type returns a specific structured format:
+
+### Artist Results
+
+```typescript
+{
+  artists: [
+    {
+      name: string,              // Artist name
+      mbid: string,              // Artist MBID
+      country: string | null,    // ISO country code
+      disambiguation: string | null  // Additional context
+    }
+  ],
+  total_count: number,
+  query: string
+}
+```
+
+### Release Results
+
+```typescript
+{
+  releases: [
+    {
+      title: string,             // Release title
+      mbid: string,              // Release MBID
+      artist: string,            // Artist name
+      year: string | null        // Release year
+    }
+  ],
+  total_count: number,
+  query: string
+}
+```
+
+### Release Group Results
+
+```typescript
+{
+  release_groups: [
+    {
+      title: string,             // Release group title
+      mbid: string,              // Release group MBID
+      artist: string,            // Artist name
+      first_release_year: string | null  // First release year
+    }
+  ],
+  total_count: number,
+  query: string
+}
+```
+
+### Recording Results
+
+```typescript
+{
+  recordings: [
+    {
+      title: string,             // Recording title
+      mbid: string,              // Recording MBID
+      artist: string,            // Artist name
+      duration: string | null    // Duration (MM:SS)
+    }
+  ],
+  total_count: number,
+  query: string
+}
+```
+
+### Work Results
+
+```typescript
+{
+  works: [
+    {
+      title: string,             // Work title
+      mbid: string,              // Work MBID
+      disambiguation: string | null  // Additional context
+    }
+  ],
+  total_count: number,
+  query: string
+}
+```
+
+### Label Results
+
+```typescript
+{
+  labels: [
+    {
+      name: string,              // Label name
+      mbid: string,              // Label MBID
+      country: string | null,    // ISO country code
+      disambiguation: string | null  // Additional context
+    }
+  ],
+  total_count: number,
+  query: string
 }
 ```
 
@@ -295,57 +471,48 @@ Use parentheses `()` to control precedence.
 
 ## Use Cases
 
-### 1. Complex Multi-Criteria Searches
-Combine multiple conditions for precise results:
-```json
-{
-  "entity": "release",
-  "query": "artist:\"Miles Davis\" AND type:Album AND date:[1950 TO 1960] AND status:Official"
-}
-```
-
-### 2. Filter by Specific Fields
-Use fields not available in simple search:
-```json
-{
-  "entity": "release",
-  "query": "format:Vinyl AND country:JP"
-}
-```
-
-### 3. Find Releases Meeting Exact Requirements
-Perfect for collectors:
-```json
-{
-  "entity": "release",
-  "query": "artist:\"David Bowie\" AND format:Vinyl AND country:GB AND date:[1970 TO 1980]"
-}
-```
-
-### 4. Discover Music by Genre/Style
-Explore by tags:
+### 1. Search Across Different Entity Types
+Explore different aspects of music data:
 ```json
 {
   "entity": "artist",
-  "query": "tag:\"trip hop\" AND country:GB"
+  "query": "Miles Davis"
 }
 ```
 
-### 5. Research Specific Time Periods
-Historical music research:
-```json
-{
-  "entity": "recording",
-  "query": "tag:blues AND date:[1920 TO 1940]"
-}
-```
-
-### 6. Find Releases by Label
-Label-specific searches:
+### 2. Find Specific Releases
+Search for releases by title:
 ```json
 {
   "entity": "release",
-  "query": "label:\"Blue Note\" AND type:Album AND date:[1955 TO 1965]"
+  "query": "Kind of Blue"
+}
+```
+
+### 3. Discover Works
+Find musical works and compositions:
+```json
+{
+  "entity": "work",
+  "query": "Moonlight Sonata"
+}
+```
+
+### 4. Search by Label
+Find releases by record label:
+```json
+{
+  "entity": "label",
+  "query": "Blue Note"
+}
+```
+
+### 5. Cross-Reference Entities
+Use MBIDs from results to query other tools:
+```json
+{
+  "entity": "release_group",
+  "query": "Random Access Memories"
 }
 ```
 

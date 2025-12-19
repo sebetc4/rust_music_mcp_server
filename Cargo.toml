@@ -58,15 +58,13 @@ thiserror = "2"
 anyhow = "1"
 
 # Logging and tracing
-tracing = "0.1"
+tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Metadata
 lofty = "0.22.4"
 musicbrainz_rs = { version = "0.12", default-features = false, features = ["blocking"] }
-reqwest = { version = "0.12", features = ["blocking", "json"] }
-symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "ogg", "wav", "aac", "isomp4"] }
-rusty-chromaprint = "0.3.0"
+reqwest = { version = "0.12.26", features = ["blocking", "json"] }
 
 # Utilities
 async-trait = "0.1"

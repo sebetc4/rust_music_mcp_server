@@ -8,9 +8,11 @@ Search for artists in the MusicBrainz database and optionally retrieve their rel
 
 The `mb_artist_search` tool allows you to:
 - Search for artists by name
-- Look up artists by MusicBrainz ID (MBID)
 - Retrieve an artist's complete discography
-- Get detailed artist information (type, country, active period)
+- Get detailed artist information (country, area, disambiguation)
+- Returns structured JSON data with concise text summaries
+
+**Output Format**: This tool follows MCP standards, returning a short text summary plus structured JSON data for programmatic access.
 
 ---
 
@@ -18,27 +20,37 @@ The `mb_artist_search` tool allows you to:
 
 ```typescript
 {
-  artist: string,              // Artist name or MBID (required)
-  include_releases?: boolean,  // Include artist's releases (default: false)
-  limit?: number              // Max results, 1-100 (default: 25)
+  search_type: "artist" | "artist_releases",  // Type of search (required)
+  query: string,                               // Artist name or MBID (required)
+  limit?: number                               // Max results, 1-100 (default: 10)
 }
 ```
 
 ### Parameter Details
 
-- **artist** (required)
+- **search_type** (required)
+  - `"artist"`: Search for artists by name
+  - `"artist_releases"`: Search for releases by a specific artist
+
+- **query** (required)
   - Artist name for search (e.g., "Radiohead")
   - Or MBID for direct lookup (e.g., "a74b1b7f-71a5-4011-9441-d0b5e4122711")
   - Tool automatically detects MBID format and performs direct lookup
 
-- **include_releases** (optional)
-  - `false` (default): Return artist info only
-  - `true`: Include complete discography with releases
-
 - **limit** (optional)
   - Range: 1-100
-  - Default: 25
+  - Default: 10
   - Applies to both artist results and releases per artist
+
+---
+
+## Output Format
+
+The tool returns:
+1. **Text Summary**: A concise one-line description of results (e.g., "Found 5 artist(s) matching 'Radiohead'")
+2. **Structured JSON Data**: Complete data in a standardized format for programmatic access
+
+This follows MCP standards for structured tool output, providing both human-readable summaries and machine-parseable data.
 
 ---
 
@@ -53,24 +65,32 @@ Search for an artist by name to get basic information.
 {
   "name": "mb_artist_search",
   "arguments": {
-    "artist": "Radiohead"
+    "search_type": "artist",
+    "query": "Radiohead"
   }
 }
 ```
 
-**Response**:
+**Text Summary**:
 ```
-Artist Search Results for 'Radiohead'
-=====================================
+Found 1 artist(s) matching 'Radiohead'
+```
 
-Found 1 artist(s)
-
-1. Radiohead
-   MBID: a74b1b7f-71a5-4011-9441-d0b5e4122711
-   Type: Group
-   Country: GB
-   Active: 1991 - present
-   Disambiguation: UK rock band
+**Structured Data**:
+```json
+{
+  "artists": [
+    {
+      "name": "Radiohead",
+      "mbid": "a74b1b7f-71a5-4011-9441-d0b5e4122711",
+      "country": "GB",
+      "area": "Oxford",
+      "disambiguation": "UK rock band"
+    }
+  ],
+  "total_count": 1,
+  "query": "Radiohead"
+}
 ```
 
 ---
@@ -84,37 +104,45 @@ Get an artist's complete discography.
 {
   "name": "mb_artist_search",
   "arguments": {
-    "artist": "Daft Punk",
-    "include_releases": true,
-    "limit": 10
+    "search_type": "artist_releases",
+    "query": "Daft Punk",
+    "limit": 5
   }
 }
 ```
 
-**Response** (truncated):
+**Text Summary**:
 ```
-Artist Search Results for 'Daft Punk'
-======================================
+Found 5 release(s) by 'Daft Punk'
+```
 
-Found 1 artist(s)
-
-1. Daft Punk
-   MBID: 056e4f3e-d505-4dad-8ec1-d04f521cbb56
-   Type: Group
-   Country: FR
-   Active: 1993 - 2021
-   Disambiguation: French electronic music duo
-
-   Releases (showing first 10):
-
-   - Random Access Memories (2013) [Album]
-     MBID: f3dc77fa-c7c8-4e03-b4b7-cb2b36e2eaf0
-
-   - Discovery (2001) [Album]
-     MBID: b81bcdb6-4223-43e9-a6a3-90537f8c0eb5
-
-   - Homework (1997) [Album]
-     MBID: dc16fd5a-0662-4bcf-8dfb-7f5ce8a1c7b2
+**Structured Data**:
+```json
+{
+  "artist_name": "Daft Punk",
+  "artist_mbid": "056e4f3e-d505-4dad-8ec1-d04f521cbb56",
+  "releases": [
+    {
+      "title": "Random Access Memories",
+      "mbid": "f3dc77fa-c7c8-4e03-b4b7-cb2b36e2eaf0",
+      "year": "2013",
+      "country": "FR"
+    },
+    {
+      "title": "Discovery",
+      "mbid": "b81bcdb6-4223-43e9-a6a3-90537f8c0eb5",
+      "year": "2001",
+      "country": "FR"
+    },
+    {
+      "title": "Homework",
+      "mbid": "dc16fd5a-0662-4bcf-8dfb-7f5ce8a1c7b2",
+      "year": "1997",
+      "country": "FR"
+    }
+  ],
+  "total_count": 5
+}
 ```
 
 ---
@@ -128,8 +156,8 @@ When you already have the MBID, get instant results without searching.
 {
   "name": "mb_artist_search",
   "arguments": {
-    "artist": "a74b1b7f-71a5-4011-9441-d0b5e4122711",
-    "include_releases": true
+    "search_type": "artist_releases",
+    "query": "a74b1b7f-71a5-4011-9441-d0b5e4122711"
   }
 }
 ```
@@ -144,7 +172,8 @@ When you already have the MBID, get instant results without searching.
 Get the unique identifier for further queries or tagging:
 ```json
 {
-  "artist": "Massive Attack"
+  "search_type": "artist",
+  "query": "Massive Attack"
 }
 ```
 
@@ -152,17 +181,18 @@ Get the unique identifier for further queries or tagging:
 Explore an artist's complete catalog:
 ```json
 {
-  "artist": "Aphex Twin",
-  "include_releases": true,
+  "search_type": "artist_releases",
+  "query": "Aphex Twin",
   "limit": 50
 }
 ```
 
 ### 3. Verify Artist Information
-Confirm details like country, type, or active period:
+Confirm details like country or area:
 ```json
 {
-  "artist": "The Beatles"
+  "search_type": "artist",
+  "query": "The Beatles"
 }
 ```
 
@@ -170,7 +200,8 @@ Confirm details like country, type, or active period:
 Find artists with similar names by increasing the limit:
 ```json
 {
-  "artist": "Black Star",
+  "search_type": "artist",
+  "query": "Black Star",
   "limit": 50
 }
 ```
@@ -179,21 +210,45 @@ Find artists with similar names by increasing the limit:
 
 ## Response Fields
 
-### Artist Information
+### Artist Search (`search_type: "artist"`)
 
-- **Name**: Artist or band name
-- **MBID**: Unique MusicBrainz identifier
-- **Type**: Person, Group, Orchestra, Choir, Character, Other
-- **Country**: ISO country code (e.g., GB, US, FR)
-- **Active**: Begin year - end year (or "present")
-- **Disambiguation**: Additional context to distinguish similar artists
+Returns `ArtistSearchResult` with:
 
-### Release Information (when include_releases=true)
+```typescript
+{
+  artists: [
+    {
+      name: string,              // Artist or band name
+      mbid: string,              // Unique MusicBrainz identifier
+      country: string | null,    // ISO country code (e.g., "GB", "US", "FR")
+      area: string | null,       // Geographic area (e.g., "Oxford", "London")
+      disambiguation: string | null  // Additional context to distinguish similar artists
+    }
+  ],
+  total_count: number,           // Number of artists returned
+  query: string                  // Original search query
+}
+```
 
-- **Title**: Release name
-- **Year**: Release year
-- **Type**: Album, Single, EP, Compilation, etc.
-- **MBID**: Release identifier for further queries
+### Artist Releases Search (`search_type: "artist_releases"`)
+
+Returns `ArtistReleasesResult` with:
+
+```typescript
+{
+  artist_name: string,           // Artist name
+  artist_mbid: string,           // Artist MBID
+  releases: [
+    {
+      title: string,             // Release name
+      mbid: string,              // Release identifier for further queries
+      year: string | null,       // Release year (e.g., "2013")
+      country: string | null     // ISO country code
+    }
+  ],
+  total_count: number            // Number of releases returned
+}
+```
 
 ---
 
@@ -208,14 +263,14 @@ Find artists with similar names by increasing the limit:
 
 ### Pattern 1: Artist Identification Pipeline
 ```
-1. mb_artist_search (artist: "name") → Get MBID
-2. mb_artist_search (artist: MBID, include_releases: true) → Get discography
-3. mb_release_search (release_mbid: ..., include_tracklist: true) → Get tracks
+1. mb_artist_search (search_type: "artist", query: "name") → Get MBID
+2. mb_artist_search (search_type: "artist_releases", query: MBID) → Get discography
+3. mb_release_search (search_type: "release_recordings", query: release_mbid) → Get tracks
 ```
 
 ### Pattern 2: Discography Export
 ```
-1. mb_artist_search (artist: "name", include_releases: true, limit: 100)
+1. mb_artist_search (search_type: "artist_releases", query: "name", limit: 100)
 2. For each release → mb_release_search to get full details
 ```
 

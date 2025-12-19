@@ -1,6 +1,6 @@
 //! List directory tool definition.
 //!
-//! A tool that lists files and directories in a given path.
+//! A tool that lists files and directories in a given path with optional recursive traversal.
 
 use futures::FutureExt;
 use rmcp::{
@@ -9,8 +9,10 @@ use rmcp::{
     model::{CallToolResult, Content, Tool},
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, instrument, warn};
 
@@ -34,13 +36,53 @@ pub struct FSListDirParams {
     /// Show additional details (size, type, permissions)
     #[serde(default)]
     pub detailed: bool,
+
+    /// Recursion depth: 0 = no recursion (default), positive = levels deep, -1 = unlimited
+    #[serde(default)]
+    pub recursive_depth: i32,
+}
+
+// ============================================================================
+// Output Structures (JSON format for AI agents)
+// ============================================================================
+
+/// Result of listing a directory
+#[derive(Debug, Serialize, JsonSchema)]
+struct ListResult {
+    /// Path that was listed
+    path: String,
+    /// List of entries found
+    entries: Vec<EntryInfo>,
+    /// Total count of directories
+    dir_count: usize,
+    /// Total count of files
+    file_count: usize,
+    /// Warnings encountered during traversal
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+/// Information about a single file/directory entry (hierarchical structure)
+#[derive(Debug, Serialize, Clone, JsonSchema)]
+struct EntryInfo {
+    /// Name of the entry (just the filename, not full path)
+    name: String,
+    /// Type of entry: "file", "directory", or "symlink"
+    #[serde(rename = "type")]
+    entry_type: String,
+    /// Size in bytes (only for files in detailed mode)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
+    /// Child entries (only for directories when recursing)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    children: Vec<EntryInfo>,
 }
 
 // ============================================================================
 // Tool Definition
 // ============================================================================
 
-/// List directory tool - lists files and directories in a given path.
+/// List directory tool - lists files and directories in a given path with optional recursion.
 pub struct FsListDirTool;
 
 impl FsListDirTool {
@@ -48,12 +90,19 @@ impl FsListDirTool {
     pub const NAME: &'static str = "fs_list_dir";
 
     /// Tool description shown to clients.
-    pub const DESCRIPTION: &'static str = "List files and directories in a given path. Returns names, types, and optionally sizes and permissions.";
+    pub const DESCRIPTION: &'static str = "List files and directories in a given path. Supports recursive traversal with configurable depth. Returns JSON format optimized for AI agents.";
+
+    /// Safety limits
+    const MAX_DEPTH_LIMIT: usize = 10;
+    const MAX_ENTRIES_LIMIT: usize = 1000;
 
     /// Execute the tool logic (for STDIO/TCP transport via rmcp).
-    #[instrument(skip_all, fields(path = %params.path))]
+    #[instrument(skip_all, fields(path = %params.path, depth = %params.recursive_depth))]
     pub fn execute(params: &FSListDirParams, config: &Config) -> CallToolResult {
-        info!("List directory tool called for path: {}", params.path);
+        info!(
+            "List directory tool called for path: {} with recursive_depth: {}",
+            params.path, params.recursive_depth
+        );
 
         // Validate path security first
         let path = match validate_path(&params.path, config) {
@@ -76,94 +125,259 @@ impl FsListDirTool {
             ))]);
         }
 
+        // Determine effective max depth
+        let max_depth = if params.recursive_depth < 0 {
+            // -1 or "full" means unlimited, but we cap it at safety limit
+            Self::MAX_DEPTH_LIMIT
+        } else {
+            params.recursive_depth as usize
+        };
+
+        // Traverse directory with hierarchical structure
+        let mut warnings = Vec::new();
+        let mut visited_inodes = HashSet::new();
+        let mut total_count = 0;
+        let mut truncated = false;
+
+        let entries = Self::traverse_directory_hierarchical(
+            &path,
+            0,
+            max_depth,
+            params.include_hidden,
+            params.detailed,
+            config,
+            &mut warnings,
+            &mut visited_inodes,
+            &mut total_count,
+            &mut truncated,
+        );
+
+        // Add truncation warning if needed
+        if truncated {
+            warnings.push(format!(
+                "Results truncated: exceeded maximum of {} entries. Consider reducing recursive_depth.",
+                Self::MAX_ENTRIES_LIMIT
+            ));
+        }
+
+        if params.recursive_depth < 0 && max_depth == Self::MAX_DEPTH_LIMIT {
+            warnings.push(format!(
+                "Depth limited to {} levels for safety (requested unlimited).",
+                Self::MAX_DEPTH_LIMIT
+            ));
+        }
+
+        // Count directories and files recursively
+        let (dir_count, file_count) = Self::count_entries(&entries);
+
+        // Build result
+        let result = ListResult {
+            path: params.path.clone(),
+            entries,
+            dir_count,
+            file_count,
+            warnings,
+        };
+
+        info!(
+            "Listed {} total entries in {} (recursive_depth: {})",
+            result.dir_count + result.file_count,
+            params.path,
+            params.recursive_depth
+        );
+
+        // Create human-readable text summary
+        let summary = if result.warnings.is_empty() {
+            format!(
+                "Found {} directories and {} files in '{}'",
+                result.dir_count, result.file_count, params.path
+            )
+        } else {
+            format!(
+                "Found {} directories and {} files in '{}' ({} warnings)",
+                result.dir_count, result.file_count, params.path, result.warnings.len()
+            )
+        };
+
+        // Return with text summary + structured content (avoids duplicating the full hierarchy in text)
+        CallToolResult {
+            content: vec![Content::text(summary)],
+            structured_content: Some(serde_json::to_value(&result).unwrap()),
+            is_error: Some(false),
+            meta: None,
+        }
+    }
+
+    /// Recursively traverse a directory and build hierarchical structure
+    #[allow(clippy::too_many_arguments)]
+    fn traverse_directory_hierarchical(
+        current: &Path,
+        current_depth: usize,
+        max_depth: usize,
+        include_hidden: bool,
+        detailed: bool,
+        config: &Config,
+        warnings: &mut Vec<String>,
+        visited_inodes: &mut HashSet<u64>,
+        total_count: &mut usize,
+        truncated: &mut bool,
+    ) -> Vec<EntryInfo> {
+        // Check if we've hit the entry limit
+        if *total_count >= Self::MAX_ENTRIES_LIMIT {
+            *truncated = true;
+            return Vec::new();
+        }
+
+        // Check if we've exceeded max depth
+        if current_depth > max_depth {
+            return Vec::new();
+        }
+
         // Read directory entries
-        let entries = match fs::read_dir(path) {
+        let dir_entries = match fs::read_dir(current) {
             Ok(entries) => entries,
             Err(e) => {
-                warn!("Failed to read directory: {}", e);
-                return CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read directory: {}",
+                warn!("Failed to read directory {:?}: {}", current, e);
+                warnings.push(format!(
+                    "Could not read directory '{}': {}",
+                    current.display(),
                     e
-                ))]);
+                ));
+                return Vec::new();
             }
         };
 
-        let mut result_lines = Vec::new();
-        let mut file_count = 0;
-        let mut dir_count = 0;
+        // Collect and sort entries
+        let mut sorted_entries: Vec<_> = dir_entries
+            .filter_map(|entry_result| entry_result.ok())
+            .collect();
+        sorted_entries.sort_by_key(|e| e.file_name());
 
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(e) => {
-                    warn!("Error reading entry: {}", e);
-                    continue;
-                }
-            };
+        let mut results = Vec::new();
+
+        for entry in sorted_entries {
+            // Check entry limit again
+            if *total_count >= Self::MAX_ENTRIES_LIMIT {
+                *truncated = true;
+                return results;
+            }
 
             let file_name = entry.file_name();
-            let name = file_name.to_string_lossy();
+            let name = file_name.to_string_lossy().to_string();
 
             // Skip hidden files if not requested
-            if !params.include_hidden && name.starts_with('.') {
+            if !include_hidden && name.starts_with('.') {
+                continue;
+            }
+
+            let entry_path = entry.path();
+
+            // Validate path security for each entry
+            if let Err(e) = validate_path(&entry_path.to_string_lossy(), config) {
+                warn!("Path validation failed for {:?}: {}", entry_path, e);
+                warnings.push(format!(
+                    "Skipped '{}': security validation failed",
+                    entry_path.display()
+                ));
                 continue;
             }
 
             let metadata = match entry.metadata() {
                 Ok(m) => m,
                 Err(e) => {
-                    warn!("Failed to get metadata for {}: {}", name, e);
+                    warn!("Failed to get metadata for {:?}: {}", entry_path, e);
+                    warnings.push(format!(
+                        "Could not read metadata for '{}': {}",
+                        entry_path.display(),
+                        e
+                    ));
                     continue;
                 }
             };
 
-            if params.detailed {
-                let entry_type = if metadata.is_dir() {
-                    dir_count += 1;
-                    "DIR "
-                } else if metadata.is_symlink() {
-                    "LINK"
-                } else {
-                    file_count += 1;
-                    "FILE"
-                };
-
-                let size = if metadata.is_file() {
-                    format_size(metadata.len())
-                } else {
-                    "-".to_string()
-                };
-
-                result_lines.push(format!("{:4}  {:>10}  {}", entry_type, size, name));
-            } else {
-                if metadata.is_dir() {
-                    dir_count += 1;
-                    result_lines.push(format!("{}/", name));
-                } else {
-                    file_count += 1;
-                    result_lines.push(name.to_string());
+            // Check for symlink loops using inodes (Unix-like systems)
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let inode = metadata.ino();
+                if metadata.is_dir() && !visited_inodes.insert(inode) {
+                    warnings.push(format!(
+                        "Skipped '{}': symlink loop detected",
+                        entry_path.display()
+                    ));
+                    continue;
                 }
+            }
+
+            // Determine entry type
+            let entry_type = if metadata.is_dir() {
+                "directory"
+            } else if metadata.is_symlink() {
+                "symlink"
+            } else {
+                "file"
+            };
+
+            // Get size only for files in detailed mode
+            let size = if detailed && metadata.is_file() {
+                Some(metadata.len())
+            } else {
+                None
+            };
+
+            // Increment total count
+            *total_count += 1;
+
+            // Recursively get children if it's a directory and within depth limit
+            let children = if metadata.is_dir() && current_depth < max_depth {
+                Self::traverse_directory_hierarchical(
+                    &entry_path,
+                    current_depth + 1,
+                    max_depth,
+                    include_hidden,
+                    detailed,
+                    config,
+                    warnings,
+                    visited_inodes,
+                    total_count,
+                    truncated,
+                )
+            } else {
+                Vec::new()
+            };
+
+            // Add entry to results with its children
+            results.push(EntryInfo {
+                name,
+                entry_type: entry_type.to_string(),
+                size,
+                children,
+            });
+        }
+
+        results
+    }
+
+    /// Recursively count directories and files in hierarchical structure
+    fn count_entries(entries: &[EntryInfo]) -> (usize, usize) {
+        let mut dir_count = 0;
+        let mut file_count = 0;
+
+        for entry in entries {
+            match entry.entry_type.as_str() {
+                "directory" => {
+                    dir_count += 1;
+                    // Recursively count children
+                    let (child_dirs, child_files) = Self::count_entries(&entry.children);
+                    dir_count += child_dirs;
+                    file_count += child_files;
+                }
+                "file" => file_count += 1,
+                _ => {} // symlinks don't count as either
             }
         }
 
-        // Sort entries
-        result_lines.sort();
-
-        // Build response
-        let mut response = format!("Directory: {}\n", params.path);
-        if params.detailed {
-            response.push_str("\nType  Size        Name\n");
-            response.push_str("----  ----------  ----\n");
-        }
-        response.push_str(&result_lines.join("\n"));
-        response.push_str(&format!(
-            "\n\nTotal: {} directories, {} files",
-            dir_count, file_count
-        ));
-
-        info!("Listed {} entries in {}", result_lines.len(), params.path);
-
-        CallToolResult::success(vec![Content::text(response)])
+        (dir_count, file_count)
     }
 
     /// HTTP handler for this tool (for HTTP transport).
@@ -188,20 +402,27 @@ impl FsListDirTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        info!("List directory tool (HTTP) called for path: {}", path);
+        let recursive_depth = arguments
+            .get("recursive_depth")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+
+        info!(
+            "List directory tool (HTTP) called for path: {} with recursive_depth: {}",
+            path, recursive_depth
+        );
 
         let params = FSListDirParams {
             path,
             include_hidden,
             detailed,
+            recursive_depth,
         };
 
         let result = Self::execute(&params, &config);
 
-        Ok(serde_json::json!({
-            "content": result.content,
-            "isError": result.is_error.unwrap_or(false)
-        }))
+        // Serialize the full CallToolResult to preserve all fields including structuredContent
+        serde_json::to_value(&result).map_err(|e| e.to_string())
     }
 
     /// Create a Tool model for this tool (metadata).
@@ -211,7 +432,7 @@ impl FsListDirTool {
             description: Some(Self::DESCRIPTION.into()),
             input_schema: cached_schema_for_type::<FSListDirParams>(),
             annotations: None,
-            output_schema: None,
+            output_schema: Some(cached_schema_for_type::<ListResult>()),
             icons: None,
             meta: None,
             title: None,
@@ -234,33 +455,6 @@ impl FsListDirTool {
             }
             .boxed()
         })
-    }
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Format file size in human-readable format.
-fn format_size(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-
-    if bytes == 0 {
-        return "0 B".to_string();
-    }
-
-    let mut size = bytes as f64;
-    let mut unit_index = 0;
-
-    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_index += 1;
-    }
-
-    if unit_index == 0 {
-        format!("{} {}", size as u64, UNITS[unit_index])
-    } else {
-        format!("{:.1} {}", size, UNITS[unit_index])
     }
 }
 
@@ -293,21 +487,30 @@ mod tests {
             path: temp_path.to_string_lossy().to_string(),
             include_hidden: false,
             detailed: false,
+            recursive_depth: 0,
         };
 
         let config = test_config();
         let result = FsListDirTool::execute(&params, &config);
         assert!(result.is_error.is_none() || !result.is_error.unwrap());
 
-        // Extract text from result
+        // Check text summary exists (human-readable)
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(text) => &text.text,
             _ => panic!("Expected text content"),
         };
+        // The text should be a human-readable summary
+        assert!(text.contains("Found"));
+        assert!(text.contains("directories"));
+        assert!(text.contains("files"));
 
-        assert!(text.contains("file1.txt"));
-        assert!(text.contains("file2.txt"));
-        assert!(text.contains("subdir/"));
+        // Extract and parse structured content
+        let json = result.structured_content.expect("Expected structured content");
+        assert_eq!(json["dir_count"], 1);
+        assert_eq!(json["file_count"], 2);
+
+        let entries = json["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3);
     }
 
     #[test]
@@ -316,6 +519,7 @@ mod tests {
             path: "/nonexistent/path/12345".to_string(),
             include_hidden: false,
             detailed: false,
+            recursive_depth: 0,
         };
 
         let config = test_config();
@@ -334,30 +538,130 @@ mod tests {
             path: temp_path.to_string_lossy().to_string(),
             include_hidden: false,
             detailed: true,
+            recursive_depth: 0,
         };
 
         let config = test_config();
         let result = FsListDirTool::execute(&params, &config);
         assert!(result.is_error.is_none() || !result.is_error.unwrap());
 
-        // Extract text from result
-        let text = match &result.content[0].raw {
-            rmcp::model::RawContent::Text(text) => &text.text,
-            _ => panic!("Expected text content"),
-        };
+        // Extract structured content
+        let json = result.structured_content.expect("Expected structured content");
+        let entries = json["entries"].as_array().unwrap();
 
-        assert!(text.contains("FILE"));
-        assert!(text.contains("test.txt"));
+        // Find the file entry
+        let file_entry = entries.iter()
+            .find(|e| e["name"].as_str().unwrap() == "test.txt")
+            .expect("test.txt not found");
+
+        assert_eq!(file_entry["type"], "file");
+        assert_eq!(file_entry["size"], 11); // "hello world" = 11 bytes
     }
 
     #[test]
-    fn test_format_size() {
-        assert_eq!(format_size(0), "0 B");
-        assert_eq!(format_size(500), "500 B");
-        assert_eq!(format_size(1024), "1.0 KB");
-        assert_eq!(format_size(1536), "1.5 KB");
-        assert_eq!(format_size(1048576), "1.0 MB");
-        assert_eq!(format_size(1073741824), "1.0 GB");
+    fn test_list_dir_recursive_depth_1() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        // Create nested structure
+        fs::create_dir(temp_path.join("dir1")).unwrap();
+        fs::write(temp_path.join("dir1/file_in_dir1.txt"), "content").unwrap();
+        fs::write(temp_path.join("root_file.txt"), "content").unwrap();
+
+        let params = FSListDirParams {
+            path: temp_path.to_string_lossy().to_string(),
+            include_hidden: false,
+            detailed: false,
+            recursive_depth: 1,
+        };
+
+        let config = test_config();
+        let result = FsListDirTool::execute(&params, &config);
+        assert!(result.is_error.is_none() || !result.is_error.unwrap());
+
+        let json = result.structured_content.expect("Expected structured content");
+        assert_eq!(json["dir_count"], 1);
+        assert_eq!(json["file_count"], 2); // root_file.txt + file_in_dir1.txt
+
+        // Verify hierarchical structure
+        let entries = json["entries"].as_array().unwrap();
+        let dir_entry = entries.iter()
+            .find(|e| e["name"].as_str().unwrap() == "dir1")
+            .expect("dir1 not found");
+        assert_eq!(dir_entry["type"], "directory");
+        assert!(dir_entry["children"].as_array().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_list_dir_recursive_depth_2() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        // Create nested structure: root/dir1/dir2/file.txt
+        fs::create_dir(temp_path.join("dir1")).unwrap();
+        fs::create_dir(temp_path.join("dir1/dir2")).unwrap();
+        fs::write(temp_path.join("dir1/dir2/deep_file.txt"), "content").unwrap();
+        fs::write(temp_path.join("root_file.txt"), "content").unwrap();
+
+        let params = FSListDirParams {
+            path: temp_path.to_string_lossy().to_string(),
+            include_hidden: false,
+            detailed: false,
+            recursive_depth: 2,
+        };
+
+        let config = test_config();
+        let result = FsListDirTool::execute(&params, &config);
+        assert!(result.is_error.is_none() || !result.is_error.unwrap());
+
+        let json = result.structured_content.expect("Expected structured content");
+        assert_eq!(json["dir_count"], 2); // dir1, dir2
+        assert_eq!(json["file_count"], 2); // root_file.txt, deep_file.txt
+
+        // Verify nested structure
+        let entries = json["entries"].as_array().unwrap();
+        let dir1 = entries.iter()
+            .find(|e| e["name"].as_str().unwrap() == "dir1")
+            .expect("dir1 not found");
+        let dir1_children = dir1["children"].as_array().unwrap();
+        let dir2 = dir1_children.iter()
+            .find(|e| e["name"].as_str().unwrap() == "dir2")
+            .expect("dir2 not found");
+        assert!(dir2["children"].as_array().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_list_dir_hidden_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        fs::write(temp_path.join(".hidden"), "content").unwrap();
+        fs::write(temp_path.join("visible.txt"), "content").unwrap();
+
+        // Without include_hidden
+        let params = FSListDirParams {
+            path: temp_path.to_string_lossy().to_string(),
+            include_hidden: false,
+            detailed: false,
+            recursive_depth: 0,
+        };
+
+        let config = test_config();
+        let result = FsListDirTool::execute(&params, &config);
+        let json = result.structured_content.expect("Expected structured content");
+        assert_eq!(json["file_count"], 1); // Only visible.txt
+
+        // With include_hidden
+        let params = FSListDirParams {
+            path: temp_path.to_string_lossy().to_string(),
+            include_hidden: true,
+            detailed: false,
+            recursive_depth: 0,
+        };
+
+        let result = FsListDirTool::execute(&params, &config);
+        let json = result.structured_content.expect("Expected structured content");
+        assert_eq!(json["file_count"], 2); // Both .hidden and visible.txt
     }
 
     #[cfg(feature = "http")]
@@ -371,7 +675,8 @@ mod tests {
         let args = serde_json::json!({
             "path": temp_path.to_string_lossy(),
             "include_hidden": false,
-            "detailed": false
+            "detailed": false,
+            "recursive_depth": 0
         });
 
         let config = Arc::new(test_config());
@@ -389,5 +694,64 @@ mod tests {
         let config = Arc::new(test_config());
         let result = FsListDirTool::http_handler(args, config);
         assert!(result.is_err());
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_list_dir_http_handler_recursive() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        fs::create_dir(temp_path.join("subdir")).unwrap();
+        fs::write(temp_path.join("subdir/nested.txt"), "content").unwrap();
+
+        let args = serde_json::json!({
+            "path": temp_path.to_string_lossy(),
+            "include_hidden": false,
+            "detailed": false,
+            "recursive_depth": 1
+        });
+
+        let config = Arc::new(test_config());
+        let result = FsListDirTool::http_handler(args, config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_structured_content_serialization() {
+        // Test that CallToolResult::structured() produces JSON with structuredContent field
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+        fs::write(temp_path.join("file.txt"), "test").unwrap();
+
+        let params = FSListDirParams {
+            path: temp_path.to_string_lossy().to_string(),
+            include_hidden: false,
+            detailed: false,
+            recursive_depth: 0,
+        };
+
+        let config = test_config();
+        let result = FsListDirTool::execute(&params, &config);
+
+        // Serialize the CallToolResult as JSON (like the MCP server does)
+        let serialized = serde_json::to_value(&result).unwrap();
+
+        println!("Serialized CallToolResult:");
+        println!("{}", serde_json::to_string_pretty(&serialized).unwrap());
+
+        // Verify structuredContent field exists with camelCase
+        assert!(
+            serialized.get("structuredContent").is_some(),
+            "structuredContent field is missing in serialized output! Got keys: {:?}",
+            serialized.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        );
+
+        // Verify the structured content has the expected fields
+        let structured = &serialized["structuredContent"];
+        assert!(structured.get("path").is_some());
+        assert!(structured.get("entries").is_some());
+        assert!(structured.get("dir_count").is_some());
+        assert!(structured.get("file_count").is_some());
     }
 }
