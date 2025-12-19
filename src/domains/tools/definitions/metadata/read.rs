@@ -11,7 +11,7 @@ use rmcp::{
 use futures::FutureExt;
 use lofty::prelude::*;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{info, instrument, warn};
 
@@ -31,6 +31,45 @@ pub struct ReadMetadataParams {
     /// Include technical audio properties (bitrate, sample rate, duration)
     #[serde(default)]
     pub include_properties: bool,
+}
+
+// ============================================================================
+// Structured Output Types
+// ============================================================================
+
+/// Structured output for metadata read results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct MetadataReadResult {
+    pub file: String,
+    pub format: String,
+    pub metadata: Option<AudioMetadata>,
+    pub properties: Option<AudioProperties>,
+}
+
+/// Audio metadata tags.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AudioMetadata {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub year: Option<u32>,
+    pub track: Option<u32>,
+    pub genre: Option<String>,
+    pub comment: Option<String>,
+    pub total_tags: u32,
+}
+
+/// Audio technical properties.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AudioProperties {
+    pub duration_seconds: Option<u64>,
+    pub duration_formatted: Option<String>,
+    pub bitrate_kbps: Option<u32>,
+    pub sample_rate_hz: Option<u32>,
+    pub channels: Option<u8>,
+    pub channel_description: Option<String>,
+    pub bit_depth: Option<u8>,
 }
 
 // ============================================================================
@@ -85,89 +124,95 @@ impl ReadMetadataTool {
             }
         };
 
-        let mut response = format!("File: {}\n", params.path);
-        response.push_str(&format!("Format: {:?}\n\n", tagged_file.file_type()));
+        let format_str = format!("{:?}", tagged_file.file_type());
 
-        // Read primary tag
-        if let Some(tag) = tagged_file.primary_tag() {
-            response.push_str("=== Metadata ===\n");
-
-            if let Some(title) = tag.title() {
-                response.push_str(&format!("Title:       {}\n", title));
+        // Build metadata structure
+        let metadata = tagged_file.primary_tag().map(|tag| {
+            AudioMetadata {
+                title: tag.title().map(|s| s.to_string()),
+                artist: tag.artist().map(|s| s.to_string()),
+                album: tag.album().map(|s| s.to_string()),
+                album_artist: tag.get_string(&lofty::tag::ItemKey::AlbumArtist).map(|s| s.to_string()),
+                year: tag.year(),
+                track: tag.track(),
+                genre: tag.genre().map(|s| s.to_string()),
+                comment: tag.comment().map(|s| s.to_string()),
+                total_tags: tag.item_count(),
             }
+        });
 
-            if let Some(artist) = tag.artist() {
-                response.push_str(&format!("Artist:      {}\n", artist));
-            }
+        // Build properties structure if requested
+        let properties = if params.include_properties {
+            let props = tagged_file.properties();
+            let duration_secs = props.duration().as_secs();
+            let duration_formatted = if duration_secs > 0 {
+                let minutes = duration_secs / 60;
+                let seconds = duration_secs % 60;
+                Some(format!("{}:{:02}", minutes, seconds))
+            } else {
+                None
+            };
 
-            if let Some(album) = tag.album() {
-                response.push_str(&format!("Album:       {}\n", album));
-            }
+            let channel_desc = props.channels().map(|ch| match ch {
+                1 => "Mono".to_string(),
+                2 => "Stereo".to_string(),
+                _ => "Multi-channel".to_string(),
+            });
 
-            if let Some(album_artist) = tag.get_string(&lofty::tag::ItemKey::AlbumArtist) {
-                response.push_str(&format!("AlbumArtist: {}\n", album_artist));
-            }
-
-            if let Some(year) = tag.year() {
-                response.push_str(&format!("Year:        {}\n", year));
-            }
-
-            if let Some(track) = tag.track() {
-                response.push_str(&format!("Track:       {}\n", track));
-            }
-
-            if let Some(genre) = tag.genre() {
-                response.push_str(&format!("Genre:       {}\n", genre));
-            }
-
-            if let Some(comment) = tag.comment() {
-                response.push_str(&format!("Comment:     {}\n", comment));
-            }
-
-            // Count total tags
-            let tag_count = tag.item_count();
-            response.push_str(&format!("\nTotal tags: {}\n", tag_count));
+            Some(AudioProperties {
+                duration_seconds: Some(duration_secs),
+                duration_formatted,
+                bitrate_kbps: props.audio_bitrate(),
+                sample_rate_hz: props.sample_rate(),
+                channels: props.channels(),
+                channel_description: channel_desc,
+                bit_depth: props.bit_depth(),
+            })
         } else {
-            response.push_str("No metadata tags found.\n");
-        }
+            None
+        };
 
-        // Include technical properties if requested
-        if params.include_properties {
-            response.push_str("\n=== Audio Properties ===\n");
+        // Build structured result
+        let structured_data = MetadataReadResult {
+            file: params.path.clone(),
+            format: format_str,
+            metadata: metadata.clone(),
+            properties: properties.clone(),
+        };
 
-            let properties = tagged_file.properties();
-
-            if let Some(duration) = properties.duration().as_secs().checked_sub(0) {
-                let minutes = duration / 60;
-                let seconds = duration % 60;
-                response.push_str(&format!("Duration:    {}:{:02}\n", minutes, seconds));
+        // Build text summary
+        let summary = if let Some(ref meta) = metadata {
+            let title = meta.title.as_deref().unwrap_or("Unknown");
+            let artist = meta.artist.as_deref().unwrap_or("Unknown Artist");
+            if let Some(ref props) = properties {
+                if let Some(ref duration) = props.duration_formatted {
+                    format!("'{}' by {} ({}, {} tags)", title, artist, duration, meta.total_tags)
+                } else {
+                    format!("'{}' by {} ({} tags)", title, artist, meta.total_tags)
+                }
+            } else {
+                format!("'{}' by {} ({} tags)", title, artist, meta.total_tags)
             }
-
-            if let Some(bitrate) = properties.audio_bitrate() {
-                response.push_str(&format!("Bitrate:     {} kbps\n", bitrate));
-            }
-
-            if let Some(sample_rate) = properties.sample_rate() {
-                response.push_str(&format!("Sample Rate: {} Hz\n", sample_rate));
-            }
-
-            if let Some(channels) = properties.channels() {
-                let channel_str = match channels {
-                    1 => "Mono",
-                    2 => "Stereo",
-                    _ => "Multi-channel",
-                };
-                response.push_str(&format!("Channels:    {} ({})\n", channels, channel_str));
-            }
-
-            if let Some(bit_depth) = properties.bit_depth() {
-                response.push_str(&format!("Bit Depth:   {} bits\n", bit_depth));
-            }
-        }
+        } else {
+            format!("No metadata found in '{}'", params.path)
+        };
 
         info!("Successfully read metadata from {}", params.path);
 
-        CallToolResult::success(vec![Content::text(response)])
+        // Return structured result
+        match serde_json::to_value(&structured_data) {
+            Ok(structured) => CallToolResult {
+                content: vec![Content::text(summary)],
+                structured_content: Some(structured),
+                is_error: Some(false),
+                meta: None,
+            },
+            Err(e) => {
+                warn!("Failed to serialize structured content: {}", e);
+                // Fallback to text-only
+                CallToolResult::success(vec![Content::text(summary)])
+            }
+        }
     }
 
     /// HTTP handler for this tool (for HTTP transport).
@@ -196,10 +241,20 @@ impl ReadMetadataTool {
 
         let result = Self::execute(&params, &config);
 
-        Ok(serde_json::json!({
+        let mut response = serde_json::json!({
             "content": result.content,
             "isError": result.is_error.unwrap_or(false)
-        }))
+        });
+
+        // Include structured_content if present
+        if let Some(structured) = result.structured_content {
+            response.as_object_mut().unwrap().insert(
+                "structuredContent".to_string(),
+                structured,
+            );
+        }
+
+        Ok(response)
     }
 
     /// Create a Tool model for this tool (metadata).

@@ -33,7 +33,9 @@ pub struct MbArtistParams {
     pub search_type: String,
 
     /// The search query string or MusicBrainz ID.
-    #[schemars(description = "Search query (artist name or MBID)")]
+    /// For 'artist' search: accepts artist name or artist MBID
+    /// For 'artist_releases' search: accepts artist name or artist MBID
+    #[schemars(description = "Search query (artist name or artist MBID)")]
     pub query: String,
 
     /// Maximum number of results to return (default: 10, max: 100).
@@ -141,10 +143,20 @@ impl MbArtistTool {
             .join()
             .map_err(|_| "Thread panicked during artist search".to_string())?;
 
-        Ok(serde_json::json!({
+        let mut response = serde_json::json!({
             "content": result.content,
             "isError": result.is_error.unwrap_or(false)
-        }))
+        });
+
+        // Include structured_content if present
+        if let Some(structured) = result.structured_content {
+            response.as_object_mut().unwrap().insert(
+                "structuredContent".to_string(),
+                structured,
+            );
+        }
+
+        Ok(response)
     }
 
     /// Create a Tool model for this tool (metadata).
@@ -234,48 +246,81 @@ impl MbArtistTool {
         })
     }
 
-    /// Search for artists by name.
+    /// Search for artists by name or fetch by MBID.
     pub fn search_artists(query: &str, limit: usize) -> CallToolResult {
         info!("Searching for artists matching: {}", query);
 
-        let search_query = ArtistSearchQuery::query_builder().artist(query).build();
-        let search_result = Artist::search(search_query).execute();
-
-        match search_result {
-            Ok(result) => {
-                let artists: Vec<_> = result.entities.into_iter().take(limit).collect();
-                if artists.is_empty() {
-                    return error_result(&format!("No artists found for query: {}", query));
-                }
-
-                let count = artists.len();
-                let artist_infos: Vec<ArtistSearchInfo> = artists
-                    .into_iter()
-                    .map(|a| ArtistSearchInfo {
-                        name: a.name,
-                        mbid: a.id,
-                        country: a.country.filter(|c| !c.is_empty()),
-                        area: a.area.map(|area| area.name),
-                        disambiguation: if a.disambiguation.is_empty() {
+        // If query is an MBID, fetch directly
+        if is_mbid(query) {
+            match Artist::fetch().id(query).execute() {
+                Ok(artist) => {
+                    let artist_info = ArtistSearchInfo {
+                        name: artist.name.clone(),
+                        mbid: artist.id.clone(),
+                        country: artist.country.filter(|c| !c.is_empty()),
+                        area: artist.area.map(|area| area.name),
+                        disambiguation: if artist.disambiguation.is_empty() {
                             None
                         } else {
-                            Some(a.disambiguation)
+                            Some(artist.disambiguation)
                         },
-                    })
-                    .collect();
+                    };
 
-                let structured_data = ArtistSearchResult {
-                    artists: artist_infos,
-                    total_count: count,
-                    query: query.to_string(),
-                };
+                    let structured_data = ArtistSearchResult {
+                        artists: vec![artist_info],
+                        total_count: 1,
+                        query: query.to_string(),
+                    };
 
-                let summary = format!("Found {} artist(s) matching '{}'", count, query);
-                structured_result(summary, structured_data)
+                    let summary = format!("Found artist: '{}'", artist.name);
+                    structured_result(summary, structured_data)
+                }
+                Err(e) => {
+                    error!("Artist fetch by MBID failed: {:?}", e);
+                    error_result(&format!("Artist fetch by MBID failed: {}", e))
+                }
             }
-            Err(e) => {
-                error!("Artist search failed: {:?}", e);
-                error_result(&format!("Artist search failed: {}", e))
+        } else {
+            // Search by name
+            let search_query = ArtistSearchQuery::query_builder().artist(query).build();
+            let search_result = Artist::search(search_query).execute();
+
+            match search_result {
+                Ok(result) => {
+                    let artists: Vec<_> = result.entities.into_iter().take(limit).collect();
+                    if artists.is_empty() {
+                        return error_result(&format!("No artists found for query: {}", query));
+                    }
+
+                    let count = artists.len();
+                    let artist_infos: Vec<ArtistSearchInfo> = artists
+                        .into_iter()
+                        .map(|a| ArtistSearchInfo {
+                            name: a.name,
+                            mbid: a.id,
+                            country: a.country.filter(|c| !c.is_empty()),
+                            area: a.area.map(|area| area.name),
+                            disambiguation: if a.disambiguation.is_empty() {
+                                None
+                            } else {
+                                Some(a.disambiguation)
+                            },
+                        })
+                        .collect();
+
+                    let structured_data = ArtistSearchResult {
+                        artists: artist_infos,
+                        total_count: count,
+                        query: query.to_string(),
+                    };
+
+                    let summary = format!("Found {} artist(s) matching '{}'", count, query);
+                    structured_result(summary, structured_data)
+                }
+                Err(e) => {
+                    error!("Artist search failed: {:?}", e);
+                    error_result(&format!("Artist search failed: {}", e))
+                }
             }
         }
     }
@@ -425,5 +470,24 @@ mod tests {
             !result.is_error.unwrap_or(true),
             "Expected success but got error"
         );
+    }
+
+    #[ignore]
+    #[test]
+    fn test_search_artists_by_mbid() {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        // Nirvana MBID
+        let result = MbArtistTool::search_artists("5b11f4ce-a62d-471e-81fc-a69a8278c7da", 5);
+        assert!(
+            !result.is_error.unwrap_or(true),
+            "Expected success but got error"
+        );
+        let content = &result.content[0];
+        if let RawContent::Text(text) = &content.raw {
+            assert!(
+                text.text.contains("Nirvana"),
+                "Expected 'Nirvana' in result"
+            );
+        }
     }
 }

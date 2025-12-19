@@ -9,7 +9,8 @@ pub mod metadata;
 
 pub use fs::{FsListDirTool, FsRenameTool};
 pub use mb::{
-    MbAdvancedSearchParams, MbAdvancedSearchTool, MbArtistParams, MbArtistTool,
-    MbIdentifyRecordTool, MbRecordingParams, MbRecordingTool, MbReleaseParams, MbReleaseTool,
+    MbArtistParams, MbArtistTool, MbCoverDownloadParams, MbCoverDownloadTool,
+    MbIdentifyRecordTool, MbLabelParams, MbLabelTool, MbRecordingParams, MbRecordingTool,
+    MbReleaseParams, MbReleaseTool, MbWorkParams, MbWorkTool,
 };
 pub use metadata::{ReadMetadataTool, WriteMetadataTool};

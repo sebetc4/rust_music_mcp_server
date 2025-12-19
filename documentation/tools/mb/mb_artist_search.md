@@ -29,13 +29,13 @@ The `mb_artist_search` tool allows you to:
 ### Parameter Details
 
 - **search_type** (required)
-  - `"artist"`: Search for artists by name
-  - `"artist_releases"`: Search for releases by a specific artist
+  - `"artist"`: Search for artists by name or fetch by MBID
+  - `"artist_releases"`: Search for releases by a specific artist (by name or MBID)
 
 - **query** (required)
   - Artist name for search (e.g., "Radiohead")
-  - Or MBID for direct lookup (e.g., "a74b1b7f-71a5-4011-9441-d0b5e4122711")
-  - Tool automatically detects MBID format and performs direct lookup
+  - Or artist MBID for direct lookup (e.g., "a74b1b7f-71a5-4011-9441-d0b5e4122711")
+  - Tool automatically detects MBID format and performs direct fetch instead of search
 
 - **limit** (optional)
   - Range: 1-100
@@ -147,9 +147,50 @@ Found 5 release(s) by 'Daft Punk'
 
 ---
 
-### Example 3: Direct Lookup by MBID
+### Example 3: Direct Artist Lookup by MBID
 
-When you already have the MBID, get instant results without searching.
+When you already have an artist MBID, get instant artist information without searching.
+
+**Request**:
+```json
+{
+  "name": "mb_artist_search",
+  "arguments": {
+    "search_type": "artist",
+    "query": "5b11f4ce-a62d-471e-81fc-a69a8278c7da"
+  }
+}
+```
+
+**Text Summary**:
+```
+Found artist: 'Nirvana'
+```
+
+**Structured Data**:
+```json
+{
+  "artists": [
+    {
+      "name": "Nirvana",
+      "mbid": "5b11f4ce-a62d-471e-81fc-a69a8278c7da",
+      "country": "US",
+      "area": "Aberdeen",
+      "disambiguation": "90s US grunge band"
+    }
+  ],
+  "total_count": 1,
+  "query": "5b11f4ce-a62d-471e-81fc-a69a8278c7da"
+}
+```
+
+**Behavior**: The tool detects the MBID format and performs a direct fetch instead of a search, which is faster and more accurate.
+
+---
+
+### Example 4: Direct Discography Lookup by MBID
+
+When you already have an artist MBID, get their discography directly.
 
 **Request**:
 ```json

@@ -21,28 +21,29 @@ The `mb_release_search` tool allows you to:
 
 ```typescript
 {
-  search_type: "release" | "release_recordings" | "release_group_releases",  // Type of search (required)
-  query: string,                                                              // Release title or MBID (required)
-  limit?: number                                                              // Max results, 1-100 (default: 10)
+  search_type: "release" | "release_group" | "release_recordings" | "release_group_releases",  // Type of search (required)
+  query: string,                                                                                // Release title or MBID (required)
+  limit?: number                                                                                // Max results, 1-100 (default: 10)
 }
 ```
 
 ### Parameter Details
 
 - **search_type** (required)
-  - `"release"`: Search for releases by title
-  - `"release_recordings"`: Get all tracks/recordings in a release
-  - `"release_group_releases"`: Get all versions of a release group
+  - `"release"`: Search for releases by title or fetch by MBID
+  - `"release_group"`: Search for release groups by title or fetch by MBID
+  - `"release_recordings"`: Get all tracks/recordings in a release (by title or MBID)
+  - `"release_group_releases"`: Get all versions of a release group (by title or MBID)
 
 - **query** (required)
   - Release or release group title for search (e.g., "OK Computer")
   - Or MBID for direct lookup (e.g., "52709206-8816-3c12-9ff6-f957f2f1eecf")
-  - Tool automatically detects MBID format
+  - Tool automatically detects MBID format and performs direct fetch for better accuracy
 
 - **limit** (optional)
   - Range: 1-100
   - Default: 10
-  - Applies to search results
+  - Applies to search results (ignored when using MBID as query)
 
 ---
 
@@ -98,7 +99,47 @@ Found 10 release(s) matching 'OK Computer'
 
 ---
 
-### Example 2: Get Release with Tracklist
+### Example 2: Search Release by MBID
+
+Direct fetch using a MusicBrainz ID for precise results.
+
+**Request**:
+```json
+{
+  "name": "mb_release_search",
+  "arguments": {
+    "search_type": "release",
+    "query": "52709206-8816-3c12-9ff6-f957f2f1eecf"
+  }
+}
+```
+
+**Text Summary**:
+```
+Found release: 'OK Computer'
+```
+
+**Structured Data**:
+```json
+{
+  "releases": [
+    {
+      "title": "OK Computer",
+      "mbid": "52709206-8816-3c12-9ff6-f957f2f1eecf",
+      "artist": "Radiohead",
+      "year": "1997",
+      "country": "GB",
+      "barcode": "724384260927"
+    }
+  ],
+  "total_count": 1,
+  "query": "52709206-8816-3c12-9ff6-f957f2f1eecf"
+}
+```
+
+---
+
+### Example 3: Get Release with Tracklist
 
 Retrieve complete track information including durations and MBIDs.
 
@@ -152,7 +193,7 @@ Track listing for 'OK Computer' by Radiohead (12 track(s))
 
 ---
 
-### Example 3: Find Release Group Versions
+### Example 4: Find Release Group Versions
 
 Discover all editions of a release (remasters, different countries, formats).
 
@@ -210,7 +251,16 @@ Get accurate release details for metadata tagging:
 }
 ```
 
-### 2. Get Complete Tracklists
+### 2. Direct Fetch by MBID
+Get exact release information when you have the MBID:
+```json
+{
+  "search_type": "release",
+  "query": "52709206-8816-3c12-9ff6-f957f2f1eecf"
+}
+```
+
+### 3. Get Complete Tracklists
 Extract all tracks with MBIDs for a release:
 ```json
 {
@@ -219,7 +269,16 @@ Extract all tracks with MBIDs for a release:
 }
 ```
 
-### 3. Compare Different Editions
+### 4. Search Release Groups
+Find release groups (albums as conceptual entities):
+```json
+{
+  "search_type": "release_group",
+  "query": "OK Computer"
+}
+```
+
+### 5. Compare Different Editions
 Find all versions to choose the right one:
 ```json
 {
@@ -229,7 +288,7 @@ Find all versions to choose the right one:
 }
 ```
 
-### 4. Verify Release Dates and Countries
+### 6. Verify Release Dates and Countries
 Confirm which edition you have:
 ```json
 {
@@ -238,7 +297,7 @@ Confirm which edition you have:
 }
 ```
 
-### 5. Extract Track MBIDs for Processing
+### 7. Extract Track MBIDs for Processing
 Get recording identifiers for further operations:
 ```json
 {
@@ -267,7 +326,27 @@ Returns `ReleaseSearchResult` with:
       barcode: string | null      // Barcode/UPC if available
     }
   ],
-  total_count: number,            // Number of releases returned
+  total_count: number,            // Number of releases returned (1 when using MBID)
+  query: string                   // Original search query
+}
+```
+
+### Release Group Search (`search_type: "release_group"`)
+
+Returns `ReleaseGroupSearchResult` with:
+
+```typescript
+{
+  release_groups: [
+    {
+      title: string,              // Release group name
+      mbid: string,               // Unique MusicBrainz release group identifier
+      artist: string,             // Primary artist name(s)
+      first_release_year: string | null,  // First release year
+      primary_type: string | null         // Type (Album, Single, EP, etc.)
+    }
+  ],
+  total_count: number,            // Number of release groups returned (1 when using MBID)
   query: string                   // Original search query
 }
 ```

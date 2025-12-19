@@ -68,6 +68,23 @@ pub struct TrackInfo {
     pub artist: Option<String>,
 }
 
+/// Structured output for release group search results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseGroupSearchResult {
+    pub release_groups: Vec<ReleaseGroupSearchInfo>,
+    pub total_count: usize,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReleaseGroupSearchInfo {
+    pub title: String,
+    pub mbid: String,
+    pub artist: String,
+    pub first_release_year: Option<String>,
+    pub primary_type: Option<String>,
+}
+
 /// Structured output for release group releases (all versions).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ReleaseGroupReleasesResult {
@@ -91,10 +108,11 @@ pub struct ReleaseVersionInfo {
 pub struct MbReleaseParams {
     /// The type of search to perform.
     /// - "release": Search for releases by title
+    /// - "release_group": Search for release groups by title
     /// - "release_recordings": Get all tracks/recordings in a release
     /// - "release_group_releases": Get all versions of a release group
     #[schemars(
-        description = "Search type: 'release', 'release_recordings', or 'release_group_releases'"
+        description = "Search type: 'release', 'release_group', 'release_recordings', or 'release_group_releases'"
     )]
     pub search_type: String,
 
@@ -117,7 +135,7 @@ impl MbReleaseTool {
     pub const NAME: &'static str = "mb_release_search";
 
     /// Tool description shown to clients.
-    pub const DESCRIPTION: &'static str = "Search for releases (albums) in MusicBrainz, get track listings, and find all versions of a release group.";
+    pub const DESCRIPTION: &'static str = "Search for releases (albums) and release groups in MusicBrainz, get track listings, and find all versions of a release group. Returns structured data with MBIDs, artists, dates, countries, and complete tracklists.";
 
     pub fn new() -> Self {
         Self
@@ -131,10 +149,11 @@ impl MbReleaseTool {
 
         match search_type.as_str() {
             "release" => Self::search_releases(&query, limit),
+            "release_group" => Self::search_release_groups(&query, limit),
             "release_recordings" => Self::search_release_recordings(&query, limit),
             "release_group_releases" => Self::search_release_group_releases(&query, limit),
             _ => error_result(&format!(
-                "Unknown search type: {}. Use 'release', 'release_recordings', or 'release_group_releases'",
+                "Unknown search type: {}. Use 'release', 'release_group', 'release_recordings', or 'release_group_releases'",
                 search_type
             )),
         }
@@ -174,10 +193,20 @@ impl MbReleaseTool {
             .join()
             .map_err(|_| "Thread panicked during release search".to_string())?;
 
-        Ok(serde_json::json!({
+        let mut response = serde_json::json!({
             "content": result.content,
             "isError": result.is_error.unwrap_or(false)
-        }))
+        });
+
+        // Include structured_content if present
+        if let Some(structured) = result.structured_content {
+            response.as_object_mut().unwrap().insert(
+                "structuredContent".to_string(),
+                structured,
+            );
+        }
+
+        Ok(response)
     }
 
     /// Create a Tool model for this tool (metadata).
@@ -232,10 +261,11 @@ impl MbReleaseTool {
             let result = std::thread::spawn(move || {
                 match search_type.as_str() {
                     "release" => Self::search_releases(&query, limit),
+                    "release_group" => Self::search_release_groups(&query, limit),
                     "release_recordings" => Self::search_release_recordings(&query, limit),
                     "release_group_releases" => Self::search_release_group_releases(&query, limit),
                     _ => error_result(&format!(
-                        "Unknown search type: {}. Use 'release', 'release_recordings', or 'release_group_releases'",
+                        "Unknown search type: {}. Use 'release', 'release_group', 'release_recordings', or 'release_group_releases'",
                         search_type
                     )),
                 }
@@ -257,10 +287,11 @@ impl MbReleaseTool {
             let result = tokio::task::spawn_blocking(move || {
                 match search_type.as_str() {
                     "release" => Self::search_releases(&query, limit),
+                    "release_group" => Self::search_release_groups(&query, limit),
                     "release_recordings" => Self::search_release_recordings(&query, limit),
                     "release_group_releases" => Self::search_release_group_releases(&query, limit),
                     _ => error_result(&format!(
-                        "Unknown search type: {}. Use 'release', 'release_recordings', or 'release_group_releases'",
+                        "Unknown search type: {}. Use 'release', 'release_group', 'release_recordings', or 'release_group_releases'",
                         search_type
                     )),
                 }
@@ -272,46 +303,156 @@ impl MbReleaseTool {
         })
     }
 
-    /// Search for releases by title.
+    /// Search for releases by title or fetch by MBID.
     pub fn search_releases(query: &str, limit: usize) -> CallToolResult {
         info!("Searching for releases matching: {}", query);
 
-        let search_query = ReleaseSearchQuery::query_builder().release(query).build();
+        // If query is an MBID, fetch directly
+        if is_mbid(query) {
+            match Release::fetch().id(query).execute() {
+                Ok(release) => {
+                    let release_info = ReleaseSearchInfo {
+                        title: release.title.clone(),
+                        mbid: release.id.clone(),
+                        artist: get_artist_name(&release.artist_credit),
+                        year: release.date.as_ref().and_then(|d| extract_year(&d.0)),
+                        country: release.country,
+                        barcode: release.barcode.filter(|b| !b.is_empty()),
+                    };
 
-        let search_result = Release::search(search_query).execute();
+                    let structured_data = ReleaseSearchResult {
+                        releases: vec![release_info],
+                        total_count: 1,
+                        query: query.to_string(),
+                    };
 
-        match search_result {
-            Ok(result) => {
-                let releases: Vec<_> = result.entities.into_iter().take(limit).collect();
-                if releases.is_empty() {
-                    return error_result(&format!("No releases found for query: {}", query));
+                    let summary = format!("Found release: '{}'", release.title);
+                    structured_result(summary, structured_data)
                 }
-
-                let count = releases.len();
-                let release_infos: Vec<ReleaseSearchInfo> = releases
-                    .into_iter()
-                    .map(|r| ReleaseSearchInfo {
-                        title: r.title,
-                        mbid: r.id,
-                        artist: get_artist_name(&r.artist_credit),
-                        year: r.date.as_ref().and_then(|d| extract_year(&d.0)),
-                        country: r.country,
-                        barcode: r.barcode.filter(|b| !b.is_empty()),
-                    })
-                    .collect();
-
-                let structured_data = ReleaseSearchResult {
-                    releases: release_infos,
-                    total_count: count,
-                    query: query.to_string(),
-                };
-
-                let summary = format!("Found {} release(s) matching '{}'", count, query);
-                structured_result(summary, structured_data)
+                Err(e) => {
+                    error!("Release fetch by MBID failed: {:?}", e);
+                    error_result(&format!("Release fetch by MBID failed: {}", e))
+                }
             }
-            Err(e) => {
-                error!("Release search failed: {:?}", e);
-                error_result(&format!("Release search failed: {}", e))
+        } else {
+            // Search by title
+            let search_query = ReleaseSearchQuery::query_builder().release(query).build();
+
+            let search_result = Release::search(search_query).execute();
+
+            match search_result {
+                Ok(result) => {
+                    let releases: Vec<_> = result.entities.into_iter().take(limit).collect();
+                    if releases.is_empty() {
+                        return error_result(&format!("No releases found for query: {}", query));
+                    }
+
+                    let count = releases.len();
+                    let release_infos: Vec<ReleaseSearchInfo> = releases
+                        .into_iter()
+                        .map(|r| ReleaseSearchInfo {
+                            title: r.title,
+                            mbid: r.id,
+                            artist: get_artist_name(&r.artist_credit),
+                            year: r.date.as_ref().and_then(|d| extract_year(&d.0)),
+                            country: r.country,
+                            barcode: r.barcode.filter(|b| !b.is_empty()),
+                        })
+                        .collect();
+
+                    let structured_data = ReleaseSearchResult {
+                        releases: release_infos,
+                        total_count: count,
+                        query: query.to_string(),
+                    };
+
+                    let summary = format!("Found {} release(s) matching '{}'", count, query);
+                    structured_result(summary, structured_data)
+                }
+                Err(e) => {
+                    error!("Release search failed: {:?}", e);
+                    error_result(&format!("Release search failed: {}", e))
+                }
+            }
+        }
+    }
+
+    /// Search for release groups by title or fetch by MBID.
+    pub fn search_release_groups(query: &str, limit: usize) -> CallToolResult {
+        info!("Searching for release groups matching: {}", query);
+
+        // If query is an MBID, fetch directly
+        if is_mbid(query) {
+            match ReleaseGroup::fetch().id(query).execute() {
+                Ok(release_group) => {
+                    let group_info = ReleaseGroupSearchInfo {
+                        title: release_group.title.clone(),
+                        mbid: release_group.id.clone(),
+                        artist: get_artist_name(&release_group.artist_credit),
+                        first_release_year: release_group
+                            .first_release_date
+                            .as_ref()
+                            .and_then(|d| extract_year(&d.0)),
+                        primary_type: release_group.primary_type.map(|t| format!("{:?}", t)),
+                    };
+
+                    let structured_data = ReleaseGroupSearchResult {
+                        release_groups: vec![group_info],
+                        total_count: 1,
+                        query: query.to_string(),
+                    };
+
+                    let summary = format!("Found release group: '{}'", release_group.title);
+                    structured_result(summary, structured_data)
+                }
+                Err(e) => {
+                    error!("Release group fetch by MBID failed: {:?}", e);
+                    error_result(&format!("Release group fetch by MBID failed: {}", e))
+                }
+            }
+        } else {
+            // Search by title
+            let search_query = ReleaseGroupSearchQuery::query_builder()
+                .release_group(query)
+                .build();
+
+            let search_result = ReleaseGroup::search(search_query).execute();
+
+            match search_result {
+                Ok(result) => {
+                    let groups: Vec<_> = result.entities.into_iter().take(limit).collect();
+                    if groups.is_empty() {
+                        return error_result(&format!("No release groups found for query: {}", query));
+                    }
+
+                    let count = groups.len();
+                    let group_infos: Vec<ReleaseGroupSearchInfo> = groups
+                        .into_iter()
+                        .map(|rg| ReleaseGroupSearchInfo {
+                            title: rg.title,
+                            mbid: rg.id,
+                            artist: get_artist_name(&rg.artist_credit),
+                            first_release_year: rg
+                                .first_release_date
+                                .as_ref()
+                                .and_then(|d| extract_year(&d.0)),
+                            primary_type: rg.primary_type.map(|t| format!("{:?}", t)),
+                        })
+                        .collect();
+
+                    let structured_data = ReleaseGroupSearchResult {
+                        release_groups: group_infos,
+                        total_count: count,
+                        query: query.to_string(),
+                    };
+
+                    let summary = format!("Found {} release group(s) matching '{}'", count, query);
+                    structured_result(summary, structured_data)
+                }
+                Err(e) => {
+                    error!("Release group search failed: {:?}", e);
+                    error_result(&format!("Release group search failed: {}", e))
+                }
             }
         }
     }

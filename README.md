@@ -44,10 +44,10 @@ Identify audio files, enrich metadata, and organize your music collection using 
               │      Domain Layer          │
               │                            │
               │  ┌──────────────────────┐  │
-              │  │  Tools (9 total)     │  │
+              │  │  Tools (10 total)    │  │
               │  │  • Filesystem (2)    │  │
               │  │  • Metadata (2)      │  │
-              │  │  • MusicBrainz (5)   │  │
+              │  │  • MusicBrainz (6)   │  │
               │  └──────────────────────┘  │
               │                            │
               │  ┌──────────────────────┐  │
@@ -157,9 +157,10 @@ cargo run --release --features http
 | **read_metadata** | Read audio tags from music files | Metadata |
 | **write_metadata** | Write/update audio tags | Metadata |
 | **mb_artist_search** | Search artists and get their releases | MusicBrainz |
-| **mb_release_search** | Search releases and get tracklists | MusicBrainz |
+| **mb_release_search** | Search releases, release groups, and tracklists | MusicBrainz |
 | **mb_recording_search** | Search recordings and find where they appear | MusicBrainz |
-| **mb_advanced_search** | Lucene-style queries across all entities | MusicBrainz |
+| **mb_work_search** | Search works (musical compositions) | MusicBrainz |
+| **mb_label_search** | Search labels (record labels/publishers) | MusicBrainz |
 | **mb_identify_record** | Identify audio files via fingerprinting | MusicBrainz |
 
 ---

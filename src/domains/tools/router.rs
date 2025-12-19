@@ -11,8 +11,8 @@ use crate::core::config::Config;
 use crate::domains::tools::definitions::MbIdentifyRecordTool;
 
 use super::definitions::{
-    FsListDirTool, FsRenameTool, MbAdvancedSearchTool, MbArtistTool, MbRecordingTool,
-    MbReleaseTool, ReadMetadataTool, WriteMetadataTool,
+    FsListDirTool, FsRenameTool, MbArtistTool, MbCoverDownloadTool, MbLabelTool, MbRecordingTool,
+    MbReleaseTool, MbWorkTool, ReadMetadataTool, WriteMetadataTool,
 };
 
 /// Build the tool router with all registered tools.
@@ -23,11 +23,13 @@ where
     ToolRouter::new()
         .with_route(FsListDirTool::create_route(config.clone()))
         .with_route(FsRenameTool::create_route(config.clone()))
-        .with_route(MbAdvancedSearchTool::create_route())
         .with_route(MbArtistTool::create_route())
+        .with_route(MbCoverDownloadTool::create_route(config.clone()))
         .with_route(MbIdentifyRecordTool::create_route(config.clone()))
+        .with_route(MbLabelTool::create_route())
         .with_route(MbRecordingTool::create_route())
         .with_route(MbReleaseTool::create_route())
+        .with_route(MbWorkTool::create_route())
         .with_route(ReadMetadataTool::create_route(config.clone()))
         .with_route(WriteMetadataTool::create_route(config))
 }
@@ -47,14 +49,16 @@ mod tests {
     fn test_build_router() {
         let router: ToolRouter<TestServer> = build_tool_router(test_config());
         let tools = router.list_all();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 11);
 
         let names: Vec<_> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(names.contains(&"fs_list_dir"));
         assert!(names.contains(&"mb_artist_search"));
+        assert!(names.contains(&"mb_cover_download"));
         assert!(names.contains(&"mb_release_search"));
         assert!(names.contains(&"mb_recording_search"));
-        assert!(names.contains(&"mb_advanced_search"));
+        assert!(names.contains(&"mb_label_search"));
+        assert!(names.contains(&"mb_work_search"));
         assert!(names.contains(&"mb_identify_record"));
     }
 

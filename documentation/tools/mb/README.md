@@ -13,9 +13,11 @@ This directory contains dedicated documentation for each MusicBrainz tool, mirro
 | File | Corresponding Code | Description |
 |------|-------------------|-------------|
 | [mb_artist_search.md](mb_artist_search.md) | `artist.rs` | Artist search and discography |
-| [mb_release_search.md](mb_release_search.md) | `release.rs` | Release search and tracklists |
+| [mb_release_search.md](mb_release_search.md) | `release.rs` | Release, release group search and tracklists |
 | [mb_recording_search.md](mb_recording_search.md) | `recording.rs` | Recording search and appearances |
-| [mb_advanced_search.md](mb_advanced_search.md) | `advanced.rs` | Advanced Lucene queries |
+| [mb_work_search.md](mb_work_search.md) | `work.rs` | Work (composition) search |
+| [mb_label_search.md](mb_label_search.md) | `label.rs` | Label (record label) search |
+| [mb_cover_download.md](mb_cover_download.md) | `cover_download.rs` | Cover art image download |
 | [mb_identify_record.md](mb_identify_record.md) | `identify_record.rs` | Audio fingerprinting |
 
 ### Shared Documentation
@@ -41,7 +43,9 @@ This directory contains dedicated documentation for each MusicBrainz tool, mirro
 - Find an artist → [mb_artist_search.md](mb_artist_search.md)
 - Find an album → [mb_release_search.md](mb_release_search.md)
 - Find a track → [mb_recording_search.md](mb_recording_search.md)
-- Complex query → [mb_advanced_search.md](mb_advanced_search.md)
+- Find a composition → [mb_work_search.md](mb_work_search.md)
+- Find a record label → [mb_label_search.md](mb_label_search.md)
+- Download cover art → [mb_cover_download.md](mb_cover_download.md)
 - Identify audio → [mb_identify_record.md](mb_identify_record.md)
 
 **By topic**:
@@ -106,9 +110,11 @@ Changes in code → Update matching doc file
 | Code File | Documentation File | Purpose |
 |-----------|-------------------|---------|
 | `artist.rs` | `mb_artist_search.md` | Artist search implementation & docs |
-| `release.rs` | `mb_release_search.md` | Release search implementation & docs |
+| `release.rs` | `mb_release_search.md` | Release & release group search implementation & docs |
 | `recording.rs` | `mb_recording_search.md` | Recording search implementation & docs |
-| `advanced.rs` | `mb_advanced_search.md` | Advanced search implementation & docs |
+| `work.rs` | `mb_work_search.md` | Work (composition) search implementation & docs |
+| `label.rs` | `mb_label_search.md` | Label search implementation & docs |
+| `cover_download.rs` | `mb_cover_download.md` | Cover art download implementation & docs |
 | `identify_record.rs` | `mb_identify_record.md` | Identification implementation & docs |
 | `common.rs` | `common-concepts.md` | Shared utilities & concepts |
 

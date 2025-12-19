@@ -2,22 +2,29 @@
 //!
 //! This module provides domain-specific tools for searching the MusicBrainz database:
 //! - `artist`: Search for artists and their releases
-//! - `release`: Search for releases, tracks, and release group versions
+//! - `release`: Search for releases, release groups, tracks, and versions
 //! - `recording`: Search for recordings and find where they appear
-//! - `advanced`: Advanced Lucene-style queries across all entity types
+//! - `work`: Search for works (musical compositions)
+//! - `label`: Search for labels (record labels/publishers)
+//! - `identify_record`: Audio fingerprinting via AcoustID
+//! - `cover_download`: Download cover art images from Cover Art Archive
 //!
 //! Each tool has handlers for both HTTP and STDIO/TCP transports.
 
-pub mod advanced;
 pub mod artist;
 pub mod common;
+pub mod cover_download;
 pub mod identify_record;
+pub mod label;
 pub mod recording;
 pub mod release;
+pub mod work;
 
 // Re-export domain-specific tools
-pub use advanced::{MbAdvancedSearchParams, MbAdvancedSearchTool};
 pub use artist::{MbArtistParams, MbArtistTool};
+pub use cover_download::{MbCoverDownloadParams, MbCoverDownloadTool};
 pub use identify_record::MbIdentifyRecordTool;
+pub use label::{MbLabelParams, MbLabelTool};
 pub use recording::{MbRecordingParams, MbRecordingTool};
 pub use release::{MbReleaseParams, MbReleaseTool};
+pub use work::{MbWorkParams, MbWorkTool};

@@ -172,10 +172,20 @@ impl MbRecordingTool {
             .join()
             .map_err(|_| "Thread panicked during recording search".to_string())?;
 
-        Ok(serde_json::json!({
+        let mut response = serde_json::json!({
             "content": result.content,
             "isError": result.is_error.unwrap_or(false)
-        }))
+        });
+
+        // Include structured_content if present
+        if let Some(structured) = result.structured_content {
+            response.as_object_mut().unwrap().insert(
+                "structuredContent".to_string(),
+                structured,
+            );
+        }
+
+        Ok(response)
     }
 
     /// Create a Tool model for this tool (metadata).
@@ -433,10 +443,11 @@ impl MbRecordingTool {
             }
         };
 
-        // Fetch recording with releases
+        // Fetch recording with releases and artists
         match Recording::fetch()
             .id(&recording_id)
             .with_releases()
+            .with_artists()
             .execute()
         {
             Ok(recording) => {

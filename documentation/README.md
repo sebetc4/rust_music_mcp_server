@@ -116,10 +116,10 @@ The Music MCP Server is a **Rust-based MCP (Model Context Protocol) server** des
                     ┌──────────────▼──────────────┐
                     │       Domain Layer           │
                     │  ┌────────────────────────┐  │
-                    │  │  Tools (9 total)       │  │
+                    │  │  Tools (10 total)      │  │
                     │  │  - Filesystem (2)      │  │
                     │  │  - Metadata (2)        │  │
-                    │  │  - MusicBrainz (5)     │  │
+                    │  │  - MusicBrainz (6)     │  │
                     │  └────────────────────────┘  │
                     │  ┌────────────────────────┐  │
                     │  │  Resources & Prompts   │  │
@@ -136,7 +136,7 @@ The Music MCP Server is a **Rust-based MCP (Model Context Protocol) server** des
 
 ---
 
-## Available Tools (9 Total)
+## Available Tools (10 Total)
 
 | Tool Name | Category | Description |
 |-----------|----------|-------------|
@@ -145,9 +145,10 @@ The Music MCP Server is a **Rust-based MCP (Model Context Protocol) server** des
 | `read_metadata` | Metadata | Read audio tags (MP3, FLAC, M4A, WAV, OGG) |
 | `write_metadata` | Metadata | Write/update audio tags |
 | `mb_artist_search` | MusicBrainz | Search artists, get releases |
-| `mb_release_search` | MusicBrainz | Search releases, get tracklists |
-| `mb_recording_search` | MusicBrainz | Search recordings |
-| `mb_advanced_search` | MusicBrainz | Lucene-style queries across entities |
+| `mb_release_search` | MusicBrainz | Search releases, release groups, and tracklists |
+| `mb_recording_search` | MusicBrainz | Search recordings and find where they appear |
+| `mb_work_search` | MusicBrainz | Search works (musical compositions) |
+| `mb_label_search` | MusicBrainz | Search labels (record labels/publishers) |
 | `mb_identify_record` | MusicBrainz | Audio fingerprinting via AcoustID |
 
 ---

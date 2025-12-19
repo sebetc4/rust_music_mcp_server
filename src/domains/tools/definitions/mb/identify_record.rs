@@ -68,6 +68,8 @@ pub struct RecordingMatch {
 /// Release group information.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ReleaseGroupMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub r#type: Option<String>,
@@ -671,6 +673,7 @@ impl MbIdentifyRecordTool {
                         .releasegroups
                         .iter()
                         .map(|rg| ReleaseGroupMatch {
+                            id: rg.id.clone(),
                             name: rg.title.clone().unwrap_or_else(|| "Untitled".to_string()),
                             r#type: rg.r#type.clone(),
                         })
@@ -798,10 +801,20 @@ impl MbIdentifyRecordTool {
             .join()
             .map_err(|_| "Identification thread panicked".to_string())?;
 
-        Ok(serde_json::json!({
+        let mut response = serde_json::json!({
             "content": result.content,
             "isError": result.is_error.unwrap_or(false)
-        }))
+        });
+
+        // Include structured_content if present
+        if let Some(structured) = result.structured_content {
+            response.as_object_mut().unwrap().insert(
+                "structuredContent".to_string(),
+                structured,
+            );
+        }
+
+        Ok(response)
     }
 
     /// Create a Tool model for this tool (metadata).

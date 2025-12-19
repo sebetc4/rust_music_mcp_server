@@ -15,8 +15,8 @@ use crate::core::config::Config;
 use crate::domains::tools::definitions::MbIdentifyRecordTool;
 
 use super::definitions::{
-    FsListDirTool, FsRenameTool, MbAdvancedSearchTool, MbArtistTool, MbRecordingTool,
-    MbReleaseTool, ReadMetadataTool, WriteMetadataTool,
+    FsListDirTool, FsRenameTool, MbArtistTool, MbCoverDownloadTool, MbLabelTool, MbRecordingTool,
+    MbReleaseTool, MbWorkTool, ReadMetadataTool, WriteMetadataTool,
 };
 
 // ============================================================================
@@ -45,11 +45,13 @@ impl ToolRegistry {
             FsRenameTool::NAME,
             ReadMetadataTool::NAME,
             WriteMetadataTool::NAME,
-            MbAdvancedSearchTool::NAME,
             MbArtistTool::NAME,
+            MbCoverDownloadTool::NAME,
             MbIdentifyRecordTool::NAME,
-            MbReleaseTool::NAME,
+            MbLabelTool::NAME,
             MbRecordingTool::NAME,
+            MbReleaseTool::NAME,
+            MbWorkTool::NAME,
         ]
     }
 
@@ -61,11 +63,13 @@ impl ToolRegistry {
         vec![
             FsListDirTool::to_tool(),
             FsRenameTool::to_tool(),
-            MbAdvancedSearchTool::to_tool(),
             MbArtistTool::to_tool(),
+            MbCoverDownloadTool::to_tool(),
             MbIdentifyRecordTool::to_tool(),
+            MbLabelTool::to_tool(),
             MbRecordingTool::to_tool(),
             MbReleaseTool::to_tool(),
+            MbWorkTool::to_tool(),
             ReadMetadataTool::to_tool(),
             WriteMetadataTool::to_tool(),
         ]
@@ -83,13 +87,17 @@ impl ToolRegistry {
         match name {
             FsListDirTool::NAME => FsListDirTool::http_handler(arguments, self.config.clone()),
             FsRenameTool::NAME => FsRenameTool::http_handler(arguments, self.config.clone()),
-            MbAdvancedSearchTool::NAME => MbAdvancedSearchTool::http_handler(arguments),
             MbArtistTool::NAME => MbArtistTool::http_handler(arguments),
+            MbCoverDownloadTool::NAME => {
+                MbCoverDownloadTool::http_handler(arguments, self.config.clone())
+            }
             MbIdentifyRecordTool::NAME => {
                 MbIdentifyRecordTool::http_handler(arguments, self.config.clone())
             }
+            MbLabelTool::NAME => MbLabelTool::http_handler(arguments),
             MbRecordingTool::NAME => MbRecordingTool::http_handler(arguments),
             MbReleaseTool::NAME => MbReleaseTool::http_handler(arguments),
+            MbWorkTool::NAME => MbWorkTool::http_handler(arguments),
             ReadMetadataTool::NAME => ReadMetadataTool::http_handler(arguments, self.config.clone()),
             WriteMetadataTool::NAME => WriteMetadataTool::http_handler(arguments, self.config.clone()),
             _ => {
@@ -112,14 +120,16 @@ mod tests {
     fn test_registry_tool_names() {
         let registry = ToolRegistry::new(test_config());
         let names = registry.tool_names();
-        assert_eq!(names.len(), 9);
+        assert_eq!(names.len(), 11);
         assert!(names.contains(&"fs_list_dir"));
         assert!(names.contains(&"fs_rename"));
-        assert!(names.contains(&"mb_advanced_search"));
         assert!(names.contains(&"mb_artist_search"));
+        assert!(names.contains(&"mb_cover_download"));
         assert!(names.contains(&"mb_identify_record"));
+        assert!(names.contains(&"mb_label_search"));
         assert!(names.contains(&"mb_recording_search"));
         assert!(names.contains(&"mb_release_search"));
+        assert!(names.contains(&"mb_work_search"));
         assert!(names.contains(&"read_metadata"));
         assert!(names.contains(&"write_metadata"));
     }

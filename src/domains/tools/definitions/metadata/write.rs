@@ -11,7 +11,8 @@ use rmcp::{
 use futures::FutureExt;
 use lofty::prelude::*;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, instrument, warn};
 
@@ -67,6 +68,19 @@ pub struct WriteMetadataParams {
     /// If true, clear all existing tags before writing new ones
     #[serde(default)]
     pub clear_existing: bool,
+}
+
+// ============================================================================
+// Structured Output Types
+// ============================================================================
+
+/// Structured output for metadata write results.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct MetadataWriteResult {
+    pub file: String,
+    pub clear_existing: bool,
+    pub fields_updated: usize,
+    pub updated_fields: HashMap<String, String>,
 }
 
 // ============================================================================
@@ -150,64 +164,63 @@ impl WriteMetadataTool {
             }
         };
 
-        let mut updated_fields = Vec::new();
+        let mut updated_fields = HashMap::new();
 
         // Update title
         if let Some(title) = &params.title {
             tag.set_title(title.clone());
-            updated_fields.push(format!("Title: {}", title));
+            updated_fields.insert("title".to_string(), title.clone());
         }
 
         // Update artist
         if let Some(artist) = &params.artist {
             tag.set_artist(artist.clone());
-            updated_fields.push(format!("Artist: {}", artist));
+            updated_fields.insert("artist".to_string(), artist.clone());
         }
 
         // Update album
         if let Some(album) = &params.album {
             tag.set_album(album.clone());
-            updated_fields.push(format!("Album: {}", album));
+            updated_fields.insert("album".to_string(), album.clone());
         }
 
         // Update album artist
         if let Some(album_artist) = &params.album_artist {
             tag.insert_text(lofty::tag::ItemKey::AlbumArtist, album_artist.clone());
-            updated_fields.push(format!("Album Artist: {}", album_artist));
+            updated_fields.insert("album_artist".to_string(), album_artist.clone());
         }
 
         // Update year
         if let Some(year) = params.year {
             tag.set_year(year);
-            updated_fields.push(format!("Year: {}", year));
+            updated_fields.insert("year".to_string(), year.to_string());
         }
 
         // Update track number
         if let Some(track) = params.track {
             tag.set_track(track);
-            updated_fields.push(format!("Track: {}", track));
+            updated_fields.insert("track".to_string(), track.to_string());
         }
 
         // Update track total
         if let Some(track_total) = params.track_total {
             tag.set_track_total(track_total);
-            updated_fields.push(format!("Track Total: {}", track_total));
+            updated_fields.insert("track_total".to_string(), track_total.to_string());
         }
 
         // Update genre
         if let Some(genre) = &params.genre {
             tag.set_genre(genre.clone());
-            updated_fields.push(format!("Genre: {}", genre));
+            updated_fields.insert("genre".to_string(), genre.clone());
         }
 
         // Update comment
         if let Some(comment) = &params.comment {
             tag.set_comment(comment.clone());
-            updated_fields.push(format!("Comment: {}", comment));
+            updated_fields.insert("comment".to_string(), comment.clone());
         }
 
         // Save changes to file
-
         let write_options = lofty::config::WriteOptions::default();
 
         if let Err(e) = tagged_file.save_to_path(&path, write_options) {
@@ -218,32 +231,57 @@ impl WriteMetadataTool {
             ))]);
         }
 
-        let mut response = format!("Successfully updated metadata for: {}\n\n", params.path);
+        // Build structured result
+        let fields_count = updated_fields.len();
+        let structured_data = MetadataWriteResult {
+            file: params.path.clone(),
+            clear_existing: params.clear_existing,
+            fields_updated: fields_count,
+            updated_fields: updated_fields.clone(),
+        };
 
-        if params.clear_existing {
-            response.push_str("⚠️  All existing tags were cleared\n\n");
-        }
-
-        response.push_str("Updated fields:\n");
-        if updated_fields.is_empty() {
-            response.push_str("  (no fields were updated)\n");
+        // Build concise text summary
+        let summary = if fields_count == 0 {
+            format!("No fields updated for '{}'", params.path)
         } else {
-            for field in &updated_fields {
-                response.push_str(&format!("  • {}\n", field));
+            let field_names: Vec<&str> = updated_fields.keys().map(|k| k.as_str()).collect();
+            if params.clear_existing {
+                format!(
+                    "Cleared and updated {} field(s) in '{}': {}",
+                    fields_count,
+                    params.path,
+                    field_names.join(", ")
+                )
+            } else {
+                format!(
+                    "Updated {} field(s) in '{}': {}",
+                    fields_count,
+                    params.path,
+                    field_names.join(", ")
+                )
             }
-        }
+        };
 
         info!(
             "Successfully wrote metadata to {} ({} fields updated)",
             params.path,
-            if updated_fields.is_empty() {
-                0
-            } else {
-                updated_fields.len()
-            }
+            fields_count
         );
 
-        CallToolResult::success(vec![Content::text(response)])
+        // Return structured result
+        match serde_json::to_value(&structured_data) {
+            Ok(structured) => CallToolResult {
+                content: vec![Content::text(summary)],
+                structured_content: Some(structured),
+                is_error: Some(false),
+                meta: None,
+            },
+            Err(e) => {
+                warn!("Failed to serialize structured content: {}", e);
+                // Fallback to text-only
+                CallToolResult::success(vec![Content::text(summary)])
+            }
+        }
     }
 
     /// HTTP handler for this tool (for HTTP transport).
@@ -265,10 +303,20 @@ impl WriteMetadataTool {
 
         let result = Self::execute(&params, &config);
 
-        Ok(serde_json::json!({
+        let mut response = serde_json::json!({
             "content": result.content,
             "isError": result.is_error.unwrap_or(false)
-        }))
+        });
+
+        // Include structured_content if present
+        if let Some(structured) = result.structured_content {
+            response.as_object_mut().unwrap().insert(
+                "structuredContent".to_string(),
+                structured,
+            );
+        }
+
+        Ok(response)
     }
 
     /// Create a Tool model for this tool (metadata).
