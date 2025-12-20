@@ -117,7 +117,24 @@ pub struct MbReleaseParams {
     pub search_type: String,
 
     /// The search query string or MusicBrainz ID.
-    #[schemars(description = "Search query (release/release-group title or MBID)")]
+    #[schemars(description = r#"
+        Search query (release or release-group title, or MBID)
+        CRITICAL RULES FOR SEARCH BY TITLE:
+        - The query MUST contain ONLY the exact album/release title, nothing else.
+        - DO NOT include artist names, track titles, years, formats, countries, or any additional text.
+        - DO NOT add contextual information that you think might help - it will break the search.
+        - Examples of CORRECT usage:
+          * "Nevermind" (✔)
+          * "OK Computer" (✔)
+          * "The Dark Side of the Moon" (✔)
+          * "0d52c146-6e39-30d2-918e-cd9c7b3cbe07" (release MBID) (✔)
+        - Examples of INCORRECT usage:
+          * "Nevermind Nirvana" (✘ - contains artist name)
+          * "Nevermind 1991" (✘ - contains year)
+          * "OK Computer by Radiohead" (✘ - contains artist)
+          * "The Dark Side of the Moon CD" (✘ - contains format)
+          * "Nevermind Deluxe Edition" (✘ - unless that's the exact title)
+    "#)]
     pub query: String,
 
     /// Maximum number of results to return (default: 10, max: 100).
@@ -135,7 +152,7 @@ impl MbReleaseTool {
     pub const NAME: &'static str = "mb_release_search";
 
     /// Tool description shown to clients.
-    pub const DESCRIPTION: &'static str = "Search for releases (albums) and release groups in MusicBrainz, get track listings, and find all versions of a release group. Returns structured data with MBIDs, artists, dates, countries, and complete tracklists.";
+    pub const DESCRIPTION: &'static str = "Search for releases (albums) and release groups in MusicBrainz, get track listings, and find all versions of a release group. CRITICAL: The 'query' parameter must contain ONLY the album/release title (e.g., 'OK Computer'), never include artist names, years, or formats - this will cause search failures. Returns structured data with MBIDs, artists, dates, countries, and complete tracklists.";
 
     pub fn new() -> Self {
         Self

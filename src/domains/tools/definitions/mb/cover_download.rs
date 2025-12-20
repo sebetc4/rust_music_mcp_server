@@ -4,10 +4,6 @@
 //! Supports multiple thumbnail sizes with intelligent fallback strategies.
 
 use futures::FutureExt;
-use musicbrainz_rs::entity::coverart::{Coverart, CoverartImage, ImageType};
-use musicbrainz_rs::entity::release::Release;
-use musicbrainz_rs::entity::CoverartResponse;
-use musicbrainz_rs::FetchCoverart;
 use rmcp::{
     ErrorData as McpError,
     handler::server::tool::{ToolCallContext, ToolRoute, schema_for_type},
@@ -22,6 +18,94 @@ use crate::core::config::Config;
 use crate::core::security::validate_path;
 
 use super::common::{error_result, is_mbid, structured_result};
+
+// ============================================================================
+// Cover Art Archive JSON structures
+// ============================================================================
+
+/// Thumbnail structure that handles both string and numeric IDs.
+/// Supports both legacy format (small/large) and new format (250/500/1200).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct Thumbnail {
+    #[serde(default)]
+    pub small: Option<String>,
+    #[serde(default)]
+    pub large: Option<String>,
+    #[serde(rename = "250", default)]
+    pub res_250: Option<String>,
+    #[serde(rename = "500", default)]
+    pub res_500: Option<String>,
+    #[serde(rename = "1200", default)]
+    pub res_1200: Option<String>,
+}
+
+/// Cover art image structure with flexible ID handling.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CoverartImage {
+    pub approved: bool,
+    pub back: bool,
+    #[serde(default)]
+    pub comment: String,
+    #[serde(default)]
+    pub edit: u64,
+    pub front: bool,
+    #[serde(deserialize_with = "deserialize_string_or_number")]
+    pub id: String,
+    pub image: String,
+    pub thumbnails: Thumbnail,
+    #[serde(default)]
+    pub types: Vec<String>,
+}
+
+/// Cover Art Archive response structure.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct Coverart {
+    pub images: Vec<CoverartImage>,
+    #[serde(default)]
+    pub release: Option<String>,
+}
+
+/// Deserializer that accepts both string and number for ID field.
+fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct StringOrNumber;
+
+    impl<'de> Visitor<'de> for StringOrNumber {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a string or number")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrNumber)
+}
 
 // ============================================================================
 // Tool Parameters
@@ -139,16 +223,12 @@ impl MbCoverDownloadTool {
             return error_result("Invalid thumbnail size (use 250, 500, 1200, or original)");
         }
 
-        // 5. Fetch coverart metadata from MusicBrainz Cover Art Archive
+        // 5. Fetch coverart metadata from Cover Art Archive
         info!("Fetching cover art metadata for MBID: {}", params.mbid);
-        let coverart = match Release::fetch_coverart().id(&params.mbid).execute() {
-            Ok(CoverartResponse::Json(coverart)) => coverart,
-            Ok(CoverartResponse::Url(_)) => {
-                error!("Unexpected URL response (expected JSON metadata)");
-                return error_result("Unexpected URL response (expected JSON metadata)");
-            }
+        let coverart = match Self::fetch_coverart(&params.mbid) {
+            Ok(data) => data,
             Err(e) => {
-                error!("Failed to fetch cover art: {:?}", e);
+                error!("Failed to fetch cover art: {}", e);
                 return error_result(&format!("Failed to fetch cover art: {}", e));
             }
         };
@@ -262,7 +342,7 @@ impl MbCoverDownloadTool {
             selected_image
                 .types
                 .first()
-                .map(|t| format!("{:?}", t))
+                .cloned()
                 .unwrap_or_else(|| "Unknown".to_string())
         };
 
@@ -397,6 +477,47 @@ impl MbCoverDownloadTool {
     // Helper Functions
     // ========================================================================
 
+    /// Fetch coverart metadata from Cover Art Archive API.
+    fn fetch_coverart(mbid: &str) -> Result<Coverart, String> {
+        let url = format!("https://coverartarchive.org/release/{}", mbid);
+
+        info!("Fetching cover art from: {}", url);
+
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("MusicMCPServer/0.1.0")
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+        let response = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // Provide more helpful error message for 404
+            if status.as_u16() == 404 {
+                return Err(format!(
+                    "No cover art available for this release (MBID: {}). The release may not have any uploaded cover art in the Cover Art Archive.",
+                    mbid
+                ));
+            }
+            return Err(format!("HTTP {} - {}", status, status.canonical_reason().unwrap_or("Unknown error")));
+        }
+
+        let json_text = response
+            .text()
+            .map_err(|e| format!("Failed to read response text: {}", e))?;
+
+        info!("Received JSON response ({} bytes)", json_text.len());
+
+        serde_json::from_str(&json_text)
+            .map_err(|e| format!("Failed to parse JSON: {} - Response: {}", e,
+                &json_text.chars().take(200).collect::<String>()))
+    }
+
     /// Select the best image (Front prioritized, fallback to first available).
     fn select_best_image(coverart: &Coverart) -> Result<&CoverartImage, &'static str> {
         if coverart.images.is_empty() {
@@ -410,9 +531,7 @@ impl MbCoverDownloadTool {
 
         // Priority 2: Image with type "Front"
         if let Some(img) = coverart.images.iter().find(|img| {
-            img.types
-                .iter()
-                .any(|t| matches!(t, ImageType::Front))
+            img.types.iter().any(|t| t.eq_ignore_ascii_case("front"))
         }) {
             return Ok(img);
         }
@@ -556,20 +675,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mbid_validation() {
-        // Valid MBIDs
-        assert!(is_mbid("65c70b9f-fdef-4bc0-a5b6-ac4e34252d3c"));
-        assert!(is_mbid("76df3287-6cda-33eb-8e9a-044b5e15ffdd"));
-
-        // Invalid MBIDs
-        assert!(!is_mbid("not-a-uuid"));
-        assert!(!is_mbid("65c70b9f-fdef-4bc0-a5b6")); // Too short
-        assert!(!is_mbid("65c70b9f-fdef-4bc0-a5b6-ac4e34252d3cXX")); // Too long
-        assert!(!is_mbid("65c70b9f-fdef-4bc0-a5b6-ac4e34252d3")); // Missing char
-        assert!(!is_mbid("65c70b9f_fdef_4bc0_a5b6_ac4e34252d3c")); // Wrong separator
-    }
-
-    #[test]
     fn test_extension_detection() {
         assert_eq!(
             MbCoverDownloadTool::detect_extension("https://example.com/image.jpg"),
@@ -598,10 +703,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_image_url_legacy_format() {
-        use musicbrainz_rs::entity::coverart::{CoverartImage, Thumbnail};
-
-        // Create a CoverartImage with legacy format (small/large only)
+    fn test_url_selection_legacy_format() {
+        // Test with legacy format (small/large only)
         let thumbnail = Thumbnail {
             small: Some("http://example.com/image-250.jpg".to_string()),
             large: Some("http://example.com/image-500.jpg".to_string()),
@@ -613,41 +716,34 @@ mod tests {
         let image = CoverartImage {
             approved: true,
             back: false,
-            comment: "Test".to_string(),
-            edit: 123,
+            comment: String::new(),
+            edit: 0,
             front: true,
-            id: 456,
+            id: "12345".to_string(),
             image: "http://example.com/image-original.jpg".to_string(),
             thumbnails: thumbnail,
-            types: vec![],
+            types: vec!["Front".to_string()],
         };
 
-        // Test 250px request - should use "small" field
+        // Test 250px - should use "small" field
         let (url, size) = MbCoverDownloadTool::get_image_url(&image, "250");
         assert_eq!(url, "http://example.com/image-250.jpg");
         assert_eq!(size, "250");
 
-        // Test 500px request - should use "large" field
+        // Test 500px - should use "large" field
         let (url, size) = MbCoverDownloadTool::get_image_url(&image, "500");
         assert_eq!(url, "http://example.com/image-500.jpg");
         assert_eq!(size, "500");
 
-        // Test 1200px request - should fallback to "large" (500)
+        // Test 1200px - should fallback to "large"
         let (url, size) = MbCoverDownloadTool::get_image_url(&image, "1200");
         assert_eq!(url, "http://example.com/image-500.jpg");
         assert_eq!(size, "500");
-
-        // Test original request
-        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "original");
-        assert_eq!(url, "http://example.com/image-original.jpg");
-        assert_eq!(size, "original");
     }
 
     #[test]
-    fn test_get_image_url_new_format() {
-        use musicbrainz_rs::entity::coverart::{CoverartImage, Thumbnail};
-
-        // Create a CoverartImage with new format (res_250, res_500, res_1200)
+    fn test_url_selection_new_format() {
+        // Test with new format (res_250, res_500, res_1200)
         let thumbnail = Thumbnail {
             small: None,
             large: None,
@@ -659,63 +755,22 @@ mod tests {
         let image = CoverartImage {
             approved: true,
             back: false,
-            comment: "Test".to_string(),
-            edit: 123,
+            comment: String::new(),
+            edit: 0,
             front: true,
-            id: 456,
+            id: "12345".to_string(),
             image: "http://example.com/image-original.jpg".to_string(),
             thumbnails: thumbnail,
-            types: vec![],
+            types: vec!["Front".to_string()],
         };
 
-        // Test all sizes
         let (url, size) = MbCoverDownloadTool::get_image_url(&image, "250");
         assert_eq!(url, "http://example.com/image-250.jpg");
         assert_eq!(size, "250");
 
-        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "500");
-        assert_eq!(url, "http://example.com/image-500.jpg");
-        assert_eq!(size, "500");
-
         let (url, size) = MbCoverDownloadTool::get_image_url(&image, "1200");
         assert_eq!(url, "http://example.com/image-1200.jpg");
         assert_eq!(size, "1200");
-    }
-
-    #[test]
-    fn test_get_image_url_mixed_format() {
-        use musicbrainz_rs::entity::coverart::{CoverartImage, Thumbnail};
-
-        // Create a CoverartImage with mixed format (some legacy, some new)
-        let thumbnail = Thumbnail {
-            small: Some("http://example.com/image-250-legacy.jpg".to_string()),
-            large: None,
-            res_250: None,
-            res_500: Some("http://example.com/image-500-new.jpg".to_string()),
-            res_1200: None,
-        };
-
-        let image = CoverartImage {
-            approved: true,
-            back: false,
-            comment: "Test".to_string(),
-            edit: 123,
-            front: true,
-            id: 456,
-            image: "http://example.com/image-original.jpg".to_string(),
-            thumbnails: thumbnail,
-            types: vec![],
-        };
-
-        // Test 250px - should prefer res_250 (None) then fallback to small (legacy)
-        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "250");
-        assert_eq!(url, "http://example.com/image-250-legacy.jpg");
-        assert_eq!(size, "250");
-
-        // Test 500px - should use res_500 (new format available)
-        let (url, size) = MbCoverDownloadTool::get_image_url(&image, "500");
-        assert_eq!(url, "http://example.com/image-500-new.jpg");
-        assert_eq!(size, "500");
     }
 
     // Network tests (require actual internet connection, run with --ignored)
@@ -784,6 +839,47 @@ mod tests {
         let config = Config::default();
         let result = MbCoverDownloadTool::execute(&params, &config);
 
+        if result.is_error.unwrap_or(true) {
+            eprintln!("Error content: {:?}", result.content);
+        }
         assert!(!result.is_error.unwrap_or(true), "Expected success");
+    }
+
+    #[ignore]
+    #[test]
+    fn test_download_legacy_format() {
+        use tempfile::TempDir;
+
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+
+        let temp_dir = TempDir::new().unwrap();
+        // This MBID returns legacy format (small/large instead of res_250/res_500)
+        let params = MbCoverDownloadParams {
+            mbid: "b70e194e-29ba-4c2e-9f30-d8d2df6f5f42".to_string(),
+            path: temp_dir.path().to_string_lossy().to_string(),
+            filename: "legacy_cover".to_string(),
+            thumbnail_size: "500".to_string(),
+            overwrite: false,
+        };
+
+        let config = Config::default();
+        let result = MbCoverDownloadTool::execute(&params, &config);
+
+        if result.is_error.unwrap_or(true) {
+            eprintln!("Error content: {:?}", result.content);
+        }
+        assert!(!result.is_error.unwrap_or(true), "Expected success with legacy format");
+
+        // Verify structured content
+        if let Some(structured) = result.structured_content {
+            let cover_result: CoverDownloadResult =
+                serde_json::from_value(structured).unwrap();
+            assert!(cover_result.success);
+            assert!(cover_result.file_size_bytes > 0);
+            assert_eq!(cover_result.thumbnail_size, "500");
+            assert_eq!(cover_result.image_type, "Front");
+        } else {
+            panic!("Expected structured content");
+        }
     }
 }

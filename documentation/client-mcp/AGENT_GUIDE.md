@@ -37,6 +37,96 @@ Harmonize audio file libraries by:
 - `mb_label_search` - Search record labels
 - `mb_cover_download` - Download album cover art
 
+**⚠️ CRITICAL: Query Parameter Rules**
+All MusicBrainz search tools have strict requirements for the `query` parameter:
+- **Use ONLY the exact name/title** you're searching for
+- **NEVER include** additional context (artist, year, format, etc.)
+- The search engine does NOT work like natural language - extra words break it
+- See examples below for each tool
+
+---
+
+## MusicBrainz Search: Correct Usage Examples
+
+### ❌ COMMON MISTAKES TO AVOID
+
+**DO NOT add contextual information to the query parameter:**
+
+| Tool | ❌ WRONG | ✅ CORRECT | Why Wrong? |
+|------|---------|-----------|-----------|
+| `mb_artist_search` | "Radiohead UK band" | "Radiohead" | Extra words break artist search |
+| `mb_artist_search` | "The Beatles 1960s" | "The Beatles" | Year is not part of artist name |
+| `mb_release_search` | "OK Computer Radiohead" | "OK Computer" | Artist name breaks release search |
+| `mb_release_search` | "Nevermind 1991" | "Nevermind" | Year breaks release search |
+| `mb_release_search` | "Abbey Road CD" | "Abbey Road" | Format breaks search |
+| `mb_recording_search` | "Imagine John Lennon" | "Imagine" | Artist name breaks recording search |
+| `mb_recording_search` | "Smells Like Teen Spirit by Nirvana" | "Smells Like Teen Spirit" | "by X" breaks search |
+| `mb_recording_search` | "Bohemian Rhapsody 1975" | "Bohemian Rhapsody" | Year breaks search |
+
+### ✅ CORRECT WORKFLOW EXAMPLES
+
+**Example 1: Finding metadata for "Imagine" by John Lennon**
+```
+Step 1: Search for the artist
+  Tool: mb_artist_search
+  Parameters:
+    - search_type: "artist"
+    - query: "John Lennon"  ✅ (NOT "John Lennon Beatles" ❌)
+
+Step 2: Search for the recording
+  Tool: mb_recording_search
+  Parameters:
+    - search_type: "recording"
+    - query: "Imagine"  ✅ (NOT "Imagine John Lennon" ❌)
+
+Step 3: Get releases containing the recording
+  Tool: mb_recording_search
+  Parameters:
+    - search_type: "recording_releases"
+    - query: "Imagine"  ✅ (or use the MBID from Step 2)
+```
+
+**Example 2: Finding all tracks on "OK Computer" by Radiohead**
+```
+Step 1: Search for the release
+  Tool: mb_release_search
+  Parameters:
+    - search_type: "release"
+    - query: "OK Computer"  ✅ (NOT "OK Computer Radiohead 1997" ❌)
+
+Step 2: Get tracklist
+  Tool: mb_release_search
+  Parameters:
+    - search_type: "release_recordings"
+    - query: "<MBID from Step 1>"  ✅ (or "OK Computer")
+```
+
+**Example 3: Working with metadata from filename "Nirvana - Nevermind - 03 - Smells Like Teen Spirit.mp3"**
+```
+Extracted information:
+  - Artist: "Nirvana"
+  - Album: "Nevermind"
+  - Track: "Smells Like Teen Spirit"
+
+Step 1: Search artist
+  Tool: mb_artist_search
+  Parameters:
+    - search_type: "artist"
+    - query: "Nirvana"  ✅ (extract ONLY the artist name)
+
+Step 2: Search release
+  Tool: mb_release_search
+  Parameters:
+    - search_type: "release"
+    - query: "Nevermind"  ✅ (extract ONLY the album name)
+
+Step 3: Search recording
+  Tool: mb_recording_search
+  Parameters:
+    - search_type: "recording"
+    - query: "Smells Like Teen Spirit"  ✅ (extract ONLY the track title)
+```
+
 ---
 
 ## Standard Workflow
@@ -51,9 +141,17 @@ Harmonize audio file libraries by:
 ### Phase 2: Identification & Enrichment
 ```
 For files with usable metadata/filenames:
-4. mb_artist_search     → Search by artist name
-5. mb_release_search    → Search by album/release name
-6. mb_recording_search  → Search by track title
+4. mb_artist_search     → Search by artist name ONLY (extract just the name)
+5. mb_release_search    → Search by album/release name ONLY (extract just the title)
+6. mb_recording_search  → Search by track title ONLY (extract just the title)
+
+⚠️ CRITICAL: When extracting data from filenames or existing metadata:
+   - Parse/split the information first
+   - Use ONLY the relevant part for each search
+   - Example: From "Beatles - Abbey Road - 01 - Come Together.mp3"
+     * For artist search: use "Beatles" (not the whole filename)
+     * For release search: use "Abbey Road" (not the whole filename)
+     * For recording search: use "Come Together" (not the whole filename)
 
 For completely unknown files (LAST RESORT):
 7. mb_identify_record   → Audio fingerprinting (requires fpcalc)
@@ -102,6 +200,8 @@ Directory path: /mnt/data/test
 ✅ List directory before deleting
 ✅ Verify changes after operations
 ✅ Handle errors gracefully
+✅ **Extract and parse** filename/metadata components before searching
+✅ **Use ONLY the exact name/title** in MusicBrainz query parameters
 
 ### NEVER
 ❌ Delete without confirming content first
@@ -109,6 +209,10 @@ Directory path: /mnt/data/test
 ❌ Overwrite tags without reading existing ones
 ❌ Process files outside configured root directory
 ❌ Use wildcards (not supported)
+❌ **Pass entire filenames or compound strings to MusicBrainz search tools**
+❌ **Add artist names when searching for releases/recordings**
+❌ **Add album names when searching for artists/recordings**
+❌ **Add years, formats, or other context to search queries**
 
 ---
 
@@ -141,6 +245,35 @@ Directory path: /mnt/data/test
 | "Failed to read audio file" | Unsupported/corrupted | Verify format |
 | "No matches found" | Poor fingerprint | Try manual search |
 | "Rate limit exceeded" | Too many MB requests | Wait 1 second between calls |
+| **"No artists/releases/recordings found"** | **Query contains extra info** | **Extract ONLY the name/title** |
+
+### MusicBrainz Search Debugging
+
+If you get "No results found" from MusicBrainz searches:
+
+1. **Check your query parameter:**
+   - Does it contain ONLY the artist name / album title / track title?
+   - Remove any artist names from album/track searches
+   - Remove any years, formats, or descriptive text
+   - Remove phrases like "by", "from", "feat.", etc.
+
+2. **Example debugging:**
+   ```
+   ❌ Query: "Imagine John Lennon"
+   ✅ Fixed: "Imagine"
+
+   ❌ Query: "OK Computer Radiohead 1997"
+   ✅ Fixed: "OK Computer"
+
+   ❌ Query: "Nirvana grunge band"
+   ✅ Fixed: "Nirvana"
+   ```
+
+3. **If still no results:**
+   - Verify spelling
+   - Try alternative titles (e.g., "The Beatles" vs "Beatles")
+   - Check if it's a very obscure release
+   - As last resort, use `mb_identify_record` with audio fingerprinting
 
 ### Response Format
 - Success: `isError: false`, structured content

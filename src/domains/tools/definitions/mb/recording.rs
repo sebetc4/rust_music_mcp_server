@@ -33,7 +33,23 @@ pub struct MbRecordingParams {
     pub search_type: String,
 
     /// The search query string or MusicBrainz ID.
-    #[schemars(description = "Search query (recording title or MBID)")]
+    #[schemars(description = r#"
+        Search query (recording title or MBID)
+        CRITICAL RULES FOR SEARCH BY TITLE:
+        - The query MUST contain ONLY the exact recording/track title, nothing else.
+        - DO NOT include artist names, album names, years, formats, or any additional text.
+        - DO NOT add contextual information that you think might help - it will break the search.
+        - Examples of CORRECT usage:
+          * "Imagine" (✔)
+          * "Smells Like Teen Spirit" (✔)
+          * "Bohemian Rhapsody" (✔)
+          * "3a909079-a42a-4642-b06f-398bf91f34f4" (recording MBID) (✔)
+        - Examples of INCORRECT usage:
+          * "Imagine John Lennon" (✘ - contains artist name)
+          * "Imagine 1971" (✘ - contains year)
+          * "Smells Like Teen Spirit by Nirvana" (✘ - contains artist)
+          * "Bohemian Rhapsody from A Night at the Opera" (✘ - contains album)
+    "#)]
     pub query: String,
 
     /// Maximum number of results to return (default: 10, max: 100).
@@ -116,7 +132,7 @@ impl MbRecordingTool {
 
     /// Tool description shown to clients.
     pub const DESCRIPTION: &'static str =
-        "Search for recordings (tracks/songs) in MusicBrainz and find which releases contain them. Returns structured data with concise summary including MBIDs, artists, durations, and release information.";
+        "Search for recordings (tracks/songs) in MusicBrainz and find which releases contain them. CRITICAL: The 'query' parameter must contain ONLY the track title (e.g., 'Imagine'), never include artist names, album names, or years - this will cause search failures. Returns structured data with MBIDs, artists, durations, and release information.";
 
     pub fn new() -> Self {
         Self

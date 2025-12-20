@@ -6,12 +6,11 @@
 //! 2. Export it in `definitions/mod.rs`
 //! 3. Register it here in `register_all_prompts()`
 
-use super::definitions::{
-    CodeReviewPrompt, ExplainPrompt, GreetingPrompt, PromptDefinition, SummarizePrompt,
-};
+use super::definitions::PromptDefinition;
 use super::templates::PromptTemplate;
 
 /// Build a PromptTemplate from a PromptDefinition.
+#[allow(unused)]
 fn build_template<P: PromptDefinition>() -> PromptTemplate {
     PromptTemplate {
         name: P::NAME.to_string(),
@@ -26,22 +25,12 @@ fn build_template<P: PromptDefinition>() -> PromptTemplate {
 /// This is the central place where all prompts are registered.
 /// When adding a new prompt, add it here.
 pub fn get_all_prompts() -> Vec<PromptTemplate> {
-    vec![
-        build_template::<GreetingPrompt>(),
-        build_template::<CodeReviewPrompt>(),
-        build_template::<ExplainPrompt>(),
-        build_template::<SummarizePrompt>(),
-    ]
+    vec![]
 }
 
 /// Get the list of all prompt names.
 pub fn prompt_names() -> Vec<&'static str> {
-    vec![
-        GreetingPrompt::NAME,
-        CodeReviewPrompt::NAME,
-        ExplainPrompt::NAME,
-        SummarizePrompt::NAME,
-    ]
+    vec![]
 }
 
 #[cfg(test)]

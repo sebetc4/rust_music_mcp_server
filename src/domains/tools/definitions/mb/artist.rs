@@ -33,9 +33,21 @@ pub struct MbArtistParams {
     pub search_type: String,
 
     /// The search query string or MusicBrainz ID.
-    /// For 'artist' search: accepts artist name or artist MBID
-    /// For 'artist_releases' search: accepts artist name or artist MBID
-    #[schemars(description = "Search query (artist name or artist MBID)")]
+    #[schemars(description = r#"
+        Search query (artist name or MBID)
+        IMPORTANT RULES:
+        - For artist search: Use ONLY the artist name, nothing else.
+        - For artist_releases search: Use ONLY the artist name or artist MBID.
+        - DO NOT add release names, track titles, years, genres, or any other information.
+        - Examples of CORRECT usage:
+          * "Radiohead" (✔)
+          * "The Beatles" (✔)
+          * "a74b1b7f-71a5-4011-9441-d0b5e4122711" (artist MBID) (✔)
+        - Examples of INCORRECT usage:
+          * "Radiohead OK Computer" (✘ - contains album name)
+          * "The Beatles 1960s" (✘ - contains period)
+          * "Nirvana Smells Like Teen Spirit" (✘ - contains track name)
+    "#)]
     pub query: String,
 
     /// Maximum number of results to return (default: 10, max: 100).
@@ -87,7 +99,7 @@ impl MbArtistTool {
     pub const NAME: &'static str = "mb_artist_search";
 
     /// Tool description shown to clients.
-    pub const DESCRIPTION: &'static str = "Search for artists and their releases in the MusicBrainz database. Supports artist name search and finding all releases by an artist. Returns structured data with concise summary and detailed information including MBIDs, country, area, and disambiguation.";
+    pub const DESCRIPTION: &'static str = "Search for artists and their releases in the MusicBrainz database. Supports artist name search and finding all releases by an artist. IMPORTANT: The 'query' parameter must contain ONLY the artist name (e.g., 'Radiohead'), never include album names, track titles, or years. Returns structured data with MBIDs, country, area, and disambiguation.";
 
     pub fn new() -> Self {
         Self

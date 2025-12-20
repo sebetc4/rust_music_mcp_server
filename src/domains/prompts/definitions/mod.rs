@@ -11,16 +11,6 @@
 //! 3. Export it here
 //! 4. Register in `registry.rs`
 
-mod code_review;
-mod explain;
-mod greeting;
-mod summarize;
-
-pub use code_review::CodeReviewPrompt;
-pub use explain::ExplainPrompt;
-pub use greeting::GreetingPrompt;
-pub use summarize::SummarizePrompt;
-
 use rmcp::model::PromptArgument;
 
 /// Trait for prompt definitions.

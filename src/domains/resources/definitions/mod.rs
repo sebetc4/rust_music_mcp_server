@@ -11,14 +11,6 @@
 //! 3. Export it here
 //! 4. Register in `registry.rs`
 
-mod config_example;
-mod docs_readme;
-mod server_info;
-
-pub use config_example::ConfigExampleResource;
-pub use docs_readme::DocsReadmeResource;
-pub use server_info::ServerInfoResource;
-
 use rmcp::model::ResourceContents;
 
 use super::service::ResourceContent;

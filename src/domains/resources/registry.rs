@@ -8,12 +8,11 @@
 
 use rmcp::model::{AnnotateAble, RawResource, RawResourceTemplate, ResourceTemplate};
 
-use super::definitions::{
-    ConfigExampleResource, DocsReadmeResource, ResourceDefinition, ServerInfoResource,
-};
+use super::definitions::ResourceDefinition;
 use super::service::ResourceEntry;
 
 /// Helper function to create an annotated resource from a definition.
+#[allow(unused)]
 fn build_resource<R: ResourceDefinition>() -> ResourceEntry {
     let mut raw = RawResource::new(R::URI, R::NAME);
     raw.description = Some(R::DESCRIPTION.to_string());
@@ -30,11 +29,7 @@ fn build_resource<R: ResourceDefinition>() -> ResourceEntry {
 /// This is the central place where all resources are registered.
 /// When adding a new resource, add it here.
 pub fn get_all_resources() -> Vec<ResourceEntry> {
-    vec![
-        build_resource::<ServerInfoResource>(),
-        build_resource::<ConfigExampleResource>(),
-        build_resource::<DocsReadmeResource>(),
-    ]
+    vec![]
 }
 
 /// Get all registered resource templates.
@@ -77,11 +72,7 @@ pub fn get_all_resource_templates() -> Vec<ResourceTemplate> {
 
 /// Get the list of all resource URIs.
 pub fn resource_uris() -> Vec<&'static str> {
-    vec![
-        ServerInfoResource::URI,
-        ConfigExampleResource::URI,
-        DocsReadmeResource::URI,
-    ]
+    vec![]
 }
 
 #[cfg(test)]
